@@ -7,6 +7,7 @@ import { createRequire } from "module";
 import { v4 as uuidv4 } from "uuid";
 import fs from "fs/promises";
 import path from "path";
+import crypto from "crypto";
 
 const require = createRequire(import.meta.url);
 // Load these lazily at point of use to avoid bundler issues
@@ -39,9 +40,6 @@ export class ProcessingManager {
     const vectorConfig = project.vector_store_config;
     if (!vectorConfig || !vectorConfig.url)
       throw new Error("Vector Store not configured");
-
-    // Ensure tables exist
-    await this.pg.ensureTables(vectorConfig.url, vectorConfig);
 
     let processedCount = 0;
 
@@ -117,14 +115,18 @@ export class ProcessingManager {
               chunkText,
             );
           }
-
           if (embedding && embedding.length > 0) {
             chunksData.push({
               id: chunkId,
               documentId: doc.id,
               content: chunkText,
+              contentHash: crypto
+                .createHash("sha256")
+                .update(chunkText)
+                .digest("hex"),
               embeddingId: uuidv4(),
             });
+
             embeddingsData.push(embedding);
           } else {
             console.warn(
@@ -146,9 +148,12 @@ export class ProcessingManager {
             vectorConfig.url,
             vectorConfig,
             doc,
+            content,
+            project.embedding_config.model,
             chunksData,
             embeddingsData,
           );
+
           console.log(`[ProcessingManager] Stored successfully!`);
 
           // Also store chunk records locally for counting

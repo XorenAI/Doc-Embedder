@@ -135,7 +135,7 @@ app.whenReady().then(() => {
         // Efficient way: get all doc IDs, delete all chunks where doc_id IN (...), delete all docs where id IN (...)
 
         // For now, let's iterate documents since we have the helper `deleteDocumentVectors`.
-        const docs = dbManager.getProjectDocuments(id);
+        const docs = dbManager.getProjectDocuments(id) as { id: string }[];
         for (const doc of docs) {
           await pgManager.deleteDocumentVectors(
             project.vector_store_config.url,
