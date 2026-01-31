@@ -1,0 +1,65 @@
+/* CSS variables for a professional, clean dark theme (VS Code / Linear style) */
+@import "tailwindcss";
+
+@theme {
+  --color-background: #0f0f11;
+  /* Slightly lighter than #09090b */
+  --color-foreground: #d4d4d8;
+  /* Softened from #e4e4e7 */
+
+  --color-card: #141417;
+  /* Lighter than #18181b */
+  --color-card-foreground: #fafafa;
+
+  --color-popover: #141417;
+  --color-popover-foreground: #fafafa;
+
+  --color-primary: #3b82f6;
+  --color-primary-foreground: #ffffff;
+
+  --color-secondary: #27272a;
+  --color-secondary-foreground: #fafafa;
+
+  --color-muted: #222225;
+  /* Lighter muted background */
+  --color-muted-foreground: #a1a1aa;
+
+  --color-accent: #222225;
+  --color-accent-foreground: #fafafa;
+
+  --color-destructive: #7f1d1d;
+  --color-destructive-foreground: #fef2f2;
+
+  --color-border: #222225;
+  /* Softer border color */
+  --color-input: #222225;
+  --color-ring: #3b82f6;
+
+  --radius-lg: 0.5rem;
+  --radius-md: calc(0.5rem - 2px);
+  --radius-sm: calc(0.5rem - 4px);
+}
+
+/* Base Styles */
+:root {
+  color-scheme: dark;
+}
+
+body {
+  @apply bg-background text-foreground antialiased selection:bg-blue-500/30 selection:text-blue-200;
+  font-feature-settings: "rlig" 1, "calt" 1;
+}
+
+/* Clean Scrollbar */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-track {
+  @apply bg-transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  @apply bg-zinc-800 border-2 border-background rounded-full hover:bg-zinc-700 transition-colors;
+}
