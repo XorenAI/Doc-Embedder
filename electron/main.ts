@@ -105,8 +105,52 @@ app.whenReady().then(() => {
     return dbManager.getAllProjects();
   });
 
-  ipcMain.handle("create-project", (_, name, description) => {
-    return dbManager.createProject(name, description);
+  ipcMain.handle("create-project", (_, name, description, color) => {
+    return dbManager.createProject(name, description, color);
+  });
+
+  ipcMain.handle("update-project", (_, id, updates) => {
+    return dbManager.updateProject(id, updates);
+  });
+
+  ipcMain.handle("delete-project", async (_, id) => {
+    // 1. Cleanup vectors
+    try {
+      const project = dbManager.getProject(id);
+      if (
+        project &&
+        project.vector_store_config &&
+        project.vector_store_config.url
+      ) {
+        console.log(`Cleaning up vectors for project ${id}...`);
+        // Ideally we have a bulk delete by metadata in PGVector, but our schema links to chunks/docs.
+        // If we delete the document record in Postgres, cascade should handle it?
+        // We configured PG tables with references but did we put ON DELETE CASCADE?
+        // Checking PostgresManager:
+        // "chunks" references "documents"(id) -- NO CASCADE specified in CREATE TABLE in PostgresManager.ts line 62?
+        // Wait, looking at PostgresManager.ts again:
+        // line 62: document_id UUID REFERENCES ${config.documentTable}(id),
+        // No ON DELETE CASCADE.
+        // So we must manually delete.
+        // Efficient way: get all doc IDs, delete all chunks where doc_id IN (...), delete all docs where id IN (...)
+
+        // For now, let's iterate documents since we have the helper `deleteDocumentVectors`.
+        const docs = dbManager.getProjectDocuments(id);
+        for (const doc of docs) {
+          await pgManager.deleteDocumentVectors(
+            project.vector_store_config.url,
+            project.vector_store_config,
+            doc.id,
+          );
+        }
+      }
+    } catch (e) {
+      console.error("Error cleaning up vectors during project deletion:", e);
+    }
+
+    // 2. Delete local
+    dbManager.deleteProject(id);
+    return { success: true };
   });
 
   ipcMain.handle("get-project", (_, id) => {
@@ -167,6 +211,39 @@ app.whenReady().then(() => {
 
   ipcMain.handle("get-project-documents", (_, projectId) => {
     return dbManager.getProjectDocuments(projectId);
+  });
+
+  ipcMain.handle("delete-document", async (_, projectId, documentId) => {
+    const project = dbManager.getProject(projectId);
+    if (!project) throw new Error("Project not found");
+
+    const doc = dbManager.getDocument(documentId);
+    if (!doc) throw new Error("Document not found");
+
+    // 1. Try to delete vectors if configured and document was processed/failed (might have partials)
+    if (project.vector_store_config && project.vector_store_config.url) {
+      // We only attempt to delete from vector store. If it fails (e.g. DB down), we log but allow invalidation.
+      // User probably wants it gone from the UI regardless.
+      console.log(
+        `Attempting to delete vectors for doc ${documentId} from ${project.vector_store_config.provider}`,
+      );
+      if (project.vector_store_config.provider === "pgvector") {
+        const res = await pgManager.deleteDocumentVectors(
+          project.vector_store_config.url,
+          project.vector_store_config,
+          documentId,
+        );
+        if (!res.success) {
+          console.warn("Failed to delete vectors from Postgres:", res.error);
+          // We deliberately don't throw here to allow local deletion
+        }
+      }
+      // TODO: Handle Chroma/Qdrant deletion
+    }
+
+    // 2. Delete from local database (Cascades to chunks)
+    dbManager.deleteDocument(documentId);
+    return { success: true };
   });
 
   ipcMain.handle(

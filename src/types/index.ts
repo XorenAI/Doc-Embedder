@@ -12,6 +12,7 @@ export interface Project {
   archived: boolean;
   document_count?: number;
   chunk_count?: number;
+  color?: string;
 }
 
 export interface EmbeddingConfig {
@@ -45,7 +46,7 @@ export interface AppDocument {
   source_path: string;
   content_hash?: string;
   metadata?: Record<string, unknown>;
-  status: "pending" | "processing" | "processed" | "failed";
+  status: "pending" | "processing" | "completed" | "failed";
   version: number;
   created_at: string;
   processed_at?: string;

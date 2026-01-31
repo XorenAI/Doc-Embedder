@@ -30,6 +30,9 @@ export function ProjectDetails() {
   const [activeTab, setActiveTab] = useState<
     "documents" | "chunks" | "search" | "settings"
   >("documents");
+  const [activeDocTab, setActiveDocTab] = useState<
+    "all" | "processed" | "pending" | "failed"
+  >("all");
 
   const [documents, setDocuments] = useState<AppDocument[]>([]);
 
@@ -79,6 +82,79 @@ export function ProjectDetails() {
       console.error("Import failed:", error);
     }
   }
+
+  // Draft state for settings - allows editing without immediate save
+  const [draftEmbedding, setDraftEmbedding] = useState<any>({
+    provider: "ollama",
+  });
+  const [draftChunking, setDraftChunking] = useState<any>({
+    strategy: "fixed",
+    chunk_size: 1000,
+    chunk_overlap: 100,
+  });
+  const [draftVectorStore, setDraftVectorStore] = useState<any>({
+    provider: "pgvector",
+  });
+  const [isSaving, setIsSaving] = useState(false);
+
+  // Initialize drafts when project loads
+  useEffect(() => {
+    if (project) {
+      setDraftEmbedding(project.embedding_config || { provider: "ollama" });
+      setDraftChunking(
+        project.chunking_config || {
+          strategy: "fixed",
+          chunk_size: 1000,
+          chunk_overlap: 100,
+        },
+      );
+      setDraftVectorStore(
+        project.vector_store_config || { provider: "pgvector" },
+      );
+    }
+  }, [project?.id]); // Only reset when project changes
+
+  // Check if there are unsaved changes
+  const hasUnsavedChanges =
+    project &&
+    (JSON.stringify(draftEmbedding) !==
+      JSON.stringify(project.embedding_config || {}) ||
+      JSON.stringify(draftChunking) !==
+        JSON.stringify(project.chunking_config || {}) ||
+      JSON.stringify(draftVectorStore) !==
+        JSON.stringify(project.vector_store_config || {}));
+
+  // Save all settings
+  const saveSettings = async () => {
+    if (!project) return;
+    setIsSaving(true);
+    try {
+      const updated = await window.ipcRenderer.updateProjectConfig(
+        project.id,
+        draftEmbedding,
+        draftChunking,
+        draftVectorStore,
+      );
+      setProject(updated);
+      // Re-sync drafts with saved values
+      setDraftEmbedding(updated.embedding_config || {});
+      setDraftChunking(updated.chunking_config || {});
+      setDraftVectorStore(updated.vector_store_config || {});
+    } catch (err) {
+      console.error("Failed to save settings:", err);
+      alert("Failed to save settings. Please try again.");
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  // Revert to saved values
+  const discardChanges = () => {
+    if (!project) return;
+    setDraftEmbedding(project.embedding_config || {});
+    setDraftChunking(project.chunking_config || {});
+    setDraftVectorStore(project.vector_store_config || {});
+  };
 
   if (loading) {
     return (
@@ -202,88 +278,278 @@ export function ProjectDetails() {
 
       {/* Content */}
       <div className="flex-1 overflow-y-auto p-6">
-        {activeTab === "documents" &&
-          (documents.length === 0 ? (
-            <div className="flex flex-col items-center justify-center h-64 border border-dashed border-zinc-800 rounded-xl bg-zinc-900/20">
-              <div className="w-12 h-12 rounded-xl bg-zinc-900 border border-zinc-800 flex items-center justify-center mb-3">
-                <Upload className="w-6 h-6 text-zinc-600" />
-              </div>
-              <p className="text-zinc-400 mb-4">No documents imported yet.</p>
-              <Button
-                variant="outline"
-                className="gap-2"
-                onClick={handleImport}
-              >
-                Import Document
-              </Button>
-            </div>
-          ) : (
-            <div className="space-y-2">
-              {documents.map((doc) => (
-                <div
-                  key={doc.id}
-                  className="flex items-center justify-between p-4 bg-zinc-900/40 border border-white/5 rounded-lg hover:bg-zinc-900/60 transition-colors"
-                >
-                  <div className="flex items-center gap-3">
-                    <div className="w-10 h-10 rounded bg-blue-500/10 flex items-center justify-center text-blue-400">
-                      <FileText className="w-5 h-5" />
-                    </div>
-                    <div>
-                      <p className="font-medium text-white">{doc.name}</p>
-                      <p className="text-xs text-zinc-500">
-                        {new Date(doc.created_at).toLocaleString()}
-                      </p>
-                    </div>
-                  </div>
-                  <div className="flex items-center gap-3">
-                    <span
-                      className={`px-2 py-0.5 rounded text-xs font-medium uppercase tracking-wider ${
-                        doc.status === "processed"
-                          ? "bg-green-500/10 text-green-400"
-                          : doc.status === "pending"
-                            ? "bg-yellow-500/10 text-yellow-400"
-                            : "bg-zinc-800 text-zinc-400"
+        {activeTab === "documents" && (
+          <div className="space-y-6">
+            {/* Status Tabs */}
+            <div className="flex gap-2 border-b border-white/5 pb-4 overflow-x-auto">
+              {(["all", "processed", "pending", "failed"] as const).map(
+                (status) => {
+                  const label =
+                    status === "all"
+                      ? "All"
+                      : status === "processed"
+                        ? "Done"
+                        : status.charAt(0).toUpperCase() + status.slice(1);
+
+                  const count = documents.filter((d) =>
+                    status === "all"
+                      ? true
+                      : status === "pending"
+                        ? d.status === "pending" || d.status === "processing" // Group pending/processing
+                        : d.status === status,
+                  ).length;
+
+                  const isActive = (activeDocTab || "all") === status; // We need a new state for this sub-tab
+
+                  return (
+                    <button
+                      key={status}
+                      onClick={() => setActiveDocTab(status)}
+                      className={`px-3 py-1.5 rounded-full text-xs font-medium transition-colors flex items-center gap-2 ${
+                        isActive
+                          ? "bg-blue-600 text-white shadow-lg shadow-blue-500/20"
+                          : "bg-zinc-900 border border-zinc-800 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200"
                       }`}
                     >
-                      {doc.status}
-                    </span>
-                  </div>
-                </div>
-              ))}
+                      {label}
+                      <span
+                        className={`px-1.5 py-0.5 rounded-full text-[10px] ${
+                          isActive
+                            ? "bg-white/20 text-white"
+                            : "bg-zinc-800 text-zinc-500"
+                        }`}
+                      >
+                        {count}
+                      </span>
+                    </button>
+                  );
+                },
+              )}
             </div>
-          ))}
+
+            {documents.length === 0 ? (
+              <div className="flex flex-col items-center justify-center h-64 border border-dashed border-zinc-800 rounded-xl bg-zinc-900/20">
+                <div className="w-12 h-12 rounded-xl bg-zinc-900 border border-zinc-800 flex items-center justify-center mb-3">
+                  <Upload className="w-6 h-6 text-zinc-600" />
+                </div>
+                <p className="text-zinc-400 mb-4">No documents imported yet.</p>
+                <Button
+                  variant="outline"
+                  className="gap-2"
+                  onClick={handleImport}
+                >
+                  Import Document
+                </Button>
+              </div>
+            ) : (
+              <div className="space-y-2">
+                {documents
+                  .filter((d) => {
+                    const currentTab = activeDocTab || "all";
+                    if (currentTab === "all") return true;
+                    if (currentTab === "pending")
+                      return (
+                        d.status === "pending" || d.status === "processing"
+                      );
+                    return d.status === currentTab;
+                  })
+                  .map((doc) => (
+                    <div
+                      key={doc.id}
+                      className="flex items-center justify-between p-4 bg-zinc-900/40 border border-white/5 rounded-lg hover:bg-zinc-900/60 transition-colors group"
+                    >
+                      <div className="flex items-center gap-3">
+                        <div
+                          className={`w-10 h-10 rounded flex items-center justify-center ${
+                            doc.status === "completed"
+                              ? "bg-green-500/10 text-green-400"
+                              : doc.status === "failed"
+                                ? "bg-red-500/10 text-red-400"
+                                : "bg-blue-500/10 text-blue-400"
+                          }`}
+                        >
+                          <FileText className="w-5 h-5" />
+                        </div>
+                        <div>
+                          <p className="font-medium text-white">{doc.name}</p>
+                          <p className="text-xs text-zinc-500">
+                            {new Date(doc.created_at).toLocaleString()}
+                          </p>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-3">
+                        <span
+                          className={`px-2 py-0.5 rounded text-xs font-medium uppercase tracking-wider ${
+                            doc.status === "completed"
+                              ? "bg-green-500/10 text-green-400"
+                              : doc.status === "pending" ||
+                                  doc.status === "processing"
+                                ? "bg-yellow-500/10 text-yellow-400"
+                                : "bg-zinc-800 text-zinc-400"
+                          }`}
+                        >
+                          {doc.status}
+                        </span>
+
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="opacity-0 group-hover:opacity-100 transition-opacity text-zinc-500 hover:text-red-400 hover:bg-red-500/10"
+                          title="Remove Document"
+                          onClick={async (e) => {
+                            e.stopPropagation();
+                            if (
+                              !confirm(
+                                `Are you sure you want to remove "${doc.name}"? This will delete vectors from the datastore if they exist.`,
+                              )
+                            )
+                              return;
+
+                            try {
+                              const res = await window.ipcRenderer.invoke(
+                                "delete-document",
+                                project?.id,
+                                doc.id,
+                              );
+                              if (res.success) {
+                                // Refresh list
+                                const updatedDocs =
+                                  await window.ipcRenderer.getProjectDocuments(
+                                    id || "",
+                                  );
+                                setDocuments(updatedDocs);
+                                // Refresh project stats
+                                const updatedProject =
+                                  await window.ipcRenderer.invoke(
+                                    "get-project",
+                                    id,
+                                  );
+                                setProject(updatedProject);
+                              }
+                            } catch (err) {
+                              alert("Failed to delete: " + String(err));
+                            }
+                          }}
+                        >
+                          <svg
+                            xmlns="http://www.w3.org/2000/svg"
+                            width="16"
+                            height="16"
+                            viewBox="0 0 24 24"
+                            fill="none"
+                            stroke="currentColor"
+                            strokeWidth="2"
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                            className="lucide lucide-trash-2"
+                          >
+                            <path d="M3 6h18" />
+                            <path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6" />
+                            <path d="M8 6V4c0-1 1-2 2-2h4c0 1 1 2 2 2v2" />
+                            <line x1="10" x2="10" y1="11" y2="17" />
+                            <line x1="14" x2="14" y1="11" y2="17" />
+                          </svg>
+                        </Button>
+                      </div>
+                    </div>
+                  ))}
+                {documents.filter((d) => {
+                  const currentTab = activeDocTab || "all";
+                  if (currentTab === "all") return true;
+                  if (currentTab === "pending")
+                    return d.status === "pending" || d.status === "processing";
+                  return d.status === currentTab;
+                }).length === 0 && (
+                  <div className="text-center py-10 text-zinc-500 text-sm">
+                    No documents in this category.
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        )}
 
         {activeTab === "search" && <SearchComponent projectId={id!} />}
 
         {activeTab === "settings" && (
           <div className="max-w-2xl space-y-8">
+            {/* Save/Discard Header */}
+            <div
+              className={`flex items-center justify-between p-4 rounded-lg border transition-all ${
+                hasUnsavedChanges
+                  ? "bg-amber-500/10 border-amber-500/50 shadow-[0_0_15px_rgba(245,158,11,0.15)]"
+                  : "bg-zinc-900/30 border-zinc-700/30"
+              }`}
+            >
+              <div className="flex items-center gap-2">
+                {hasUnsavedChanges ? (
+                  <>
+                    <div className="w-2 h-2 rounded-full bg-amber-500 animate-pulse" />
+                    <span className="text-amber-400 font-medium text-sm">
+                      Unsaved Changes
+                    </span>
+                  </>
+                ) : (
+                  <>
+                    <div className="w-2 h-2 rounded-full bg-green-500" />
+                    <span className="text-green-400/70 text-sm">
+                      All changes saved
+                    </span>
+                  </>
+                )}
+              </div>
+              <div className="flex items-center gap-2">
+                {hasUnsavedChanges && (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={discardChanges}
+                    className="text-zinc-400 hover:text-white"
+                  >
+                    Discard
+                  </Button>
+                )}
+                <Button
+                  variant={hasUnsavedChanges ? "default" : "outline"}
+                  size="sm"
+                  onClick={saveSettings}
+                  disabled={!hasUnsavedChanges || isSaving}
+                  className={
+                    hasUnsavedChanges
+                      ? "bg-amber-500 hover:bg-amber-600 text-black"
+                      : ""
+                  }
+                >
+                  {isSaving ? "Saving..." : "Save Settings"}
+                </Button>
+              </div>
+            </div>
+
             <section className="space-y-4">
               <h3 className="text-lg font-medium text-white flex items-center gap-2">
                 <Database className="w-5 h-5 text-blue-500" />
                 Embedding Setup
               </h3>
-              <div className="bg-zinc-900/50 border border-border rounded-lg p-6 space-y-6">
+              <div
+                className={`bg-zinc-900/50 border rounded-lg p-6 space-y-6 transition-all ${
+                  JSON.stringify(draftEmbedding) !==
+                  JSON.stringify(project?.embedding_config || {})
+                    ? "border-amber-500/50 shadow-[0_0_10px_rgba(245,158,11,0.1)]"
+                    : "border-border"
+                }`}
+              >
                 <div>
                   <label className="block text-sm font-medium text-zinc-400 mb-2">
                     Embedding Provider
                   </label>
                   <select
                     className="w-full bg-zinc-950 border border-zinc-700/50 rounded-md px-3 py-2 text-white focus:outline-none focus:ring-2 focus:ring-blue-500/50"
-                    value={project?.embedding_config?.provider || "ollama"}
+                    value={draftEmbedding?.provider || "ollama"}
                     onChange={(e) => {
-                      const newConfig = {
-                        ...project?.embedding_config,
+                      setDraftEmbedding({
+                        ...draftEmbedding,
                         provider: e.target.value,
-                      };
-
-                      window.ipcRenderer
-                        .updateProjectConfig(
-                          project.id,
-                          newConfig,
-                          project.chunking_config,
-                          project.vector_store_config,
-                        )
-                        .then((updated) => setProject(updated));
+                      });
                     }}
                   >
                     <option value="ollama">Ollama (Local)</option>
@@ -291,7 +557,7 @@ export function ProjectDetails() {
                   </select>
                 </div>
 
-                {project?.embedding_config?.provider === "ollama" && (
+                {draftEmbedding?.provider === "ollama" && (
                   <div>
                     <label className="block text-sm font-medium text-zinc-400 mb-2">
                       Ollama Base URL
@@ -301,24 +567,12 @@ export function ProjectDetails() {
                         type="text"
                         className="flex-1 bg-zinc-950 border border-zinc-700/50 rounded-md px-3 py-2 text-white focus:outline-none focus:ring-2 focus:ring-blue-500/50"
                         placeholder="http://localhost:11434"
-                        value={
-                          project?.embedding_config?.api_key_ref ||
-                          "http://localhost:11434"
-                        } // Using api_key_ref temp for URL for now, or add specific field
+                        value={draftEmbedding?.api_key_ref || ""}
                         onChange={(e) => {
-                          const newConfig = {
-                            ...project?.embedding_config,
+                          setDraftEmbedding({
+                            ...draftEmbedding,
                             api_key_ref: e.target.value,
-                          };
-
-                          window.ipcRenderer
-                            .updateProjectConfig(
-                              project.id,
-                              newConfig,
-                              project.chunking_config,
-                              project.vector_store_config,
-                            )
-                            .then((updated) => setProject(updated));
+                          });
                         }}
                       />
                       <Button
@@ -326,7 +580,7 @@ export function ProjectDetails() {
                         className="shrink-0"
                         onClick={async () => {
                           const url =
-                            project?.embedding_config?.api_key_ref ||
+                            draftEmbedding?.api_key_ref ||
                             "http://localhost:11434";
 
                           const res =
@@ -349,7 +603,7 @@ export function ProjectDetails() {
                   </div>
                 )}
 
-                {project?.embedding_config?.provider === "openai" && (
+                {draftEmbedding?.provider === "openai" && (
                   <div>
                     <label className="block text-sm font-medium text-zinc-400 mb-2">
                       OpenAI API Key
@@ -359,28 +613,19 @@ export function ProjectDetails() {
                         type="password"
                         className="flex-1 bg-zinc-950 border border-zinc-700/50 rounded-md px-3 py-2 text-white focus:outline-none focus:ring-2 focus:ring-blue-500/50"
                         placeholder="sk-..."
-                        value={project?.embedding_config?.api_key_ref || ""}
+                        value={draftEmbedding?.api_key_ref || ""}
                         onChange={(e) => {
-                          const newConfig = {
-                            ...project?.embedding_config,
+                          setDraftEmbedding({
+                            ...draftEmbedding,
                             api_key_ref: e.target.value,
-                          };
-
-                          window.ipcRenderer
-                            .updateProjectConfig(
-                              project.id,
-                              newConfig,
-                              project.chunking_config,
-                              project.vector_store_config,
-                            )
-                            .then((updated) => setProject(updated));
+                          });
                         }}
                       />
                       <Button
                         variant="outline"
                         className="shrink-0"
                         onClick={async () => {
-                          const key = project?.embedding_config?.api_key_ref;
+                          const key = draftEmbedding?.api_key_ref;
                           if (!key)
                             return alert("Please enter an API Key first");
 
@@ -408,32 +653,23 @@ export function ProjectDetails() {
                       type="text"
                       className="flex-1 bg-zinc-950 border border-zinc-700/50 rounded-md px-3 py-2 text-white focus:outline-none focus:ring-2 focus:ring-blue-500/50"
                       placeholder="e.g. nomic-embed-text"
-                      value={project?.embedding_config?.model || ""}
+                      value={draftEmbedding?.model || ""}
                       onChange={(e) => {
-                        const newConfig = {
-                          ...project?.embedding_config,
+                        setDraftEmbedding({
+                          ...draftEmbedding,
                           model: e.target.value,
-                        };
-
-                        window.ipcRenderer
-                          .updateProjectConfig(
-                            project.id,
-                            newConfig,
-                            project.chunking_config,
-                            project.vector_store_config,
-                          )
-                          .then((updated) => setProject(updated));
+                        });
                       }}
                     />
-                    {project?.embedding_config?.provider === "ollama" && (
+                    {draftEmbedding?.provider === "ollama" && (
                       <Button
                         variant="outline"
                         className="shrink-0"
                         onClick={async () => {
                           const url =
-                            project?.embedding_config?.api_key_ref ||
+                            draftEmbedding?.api_key_ref ||
                             "http://localhost:11434";
-                          const model = project?.embedding_config?.model;
+                          const model = draftEmbedding?.model;
                           if (!model)
                             return alert("Please enter a model name first");
 
@@ -457,7 +693,7 @@ export function ProjectDetails() {
                     )}
                   </div>
                   <p className="text-xs text-zinc-500 mt-1">
-                    {project?.embedding_config?.provider === "ollama"
+                    {draftEmbedding?.provider === "ollama"
                       ? "Make sure you have pulled this model: `ollama pull nomic-embed-text`"
                       : "e.g. text-embedding-3-small"}
                   </p>
@@ -467,31 +703,106 @@ export function ProjectDetails() {
 
             <section className="space-y-4">
               <h3 className="text-lg font-medium text-white flex items-center gap-2">
+                <Boxes className="w-5 h-5 text-purple-500" />
+                Chunking Configuration
+              </h3>
+              <div
+                className={`bg-zinc-900/50 border rounded-lg p-6 space-y-6 transition-all ${
+                  JSON.stringify(draftChunking) !==
+                  JSON.stringify(project?.chunking_config || {})
+                    ? "border-amber-500/50 shadow-[0_0_10px_rgba(245,158,11,0.1)]"
+                    : "border-border"
+                }`}
+              >
+                <div>
+                  <label className="block text-sm font-medium text-zinc-400 mb-2">
+                    Chunking Strategy
+                  </label>
+                  <select
+                    className="w-full bg-zinc-950 border border-zinc-700/50 rounded-md px-3 py-2 text-white focus:outline-none focus:ring-2 focus:ring-purple-500/50"
+                    value={draftChunking?.strategy || "fixed"}
+                    onChange={(e) => {
+                      setDraftChunking({
+                        ...draftChunking,
+                        strategy: e.target.value,
+                      });
+                    }}
+                  >
+                    <option value="fixed">Fixed Size</option>
+                    <option value="sentence">Sentence-based</option>
+                  </select>
+                  <p className="text-xs text-zinc-500 mt-1">
+                    Fixed Size splits by character count; Sentence-based splits
+                    by sentence boundaries.
+                  </p>
+                </div>
+
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-sm font-medium text-zinc-400 mb-2">
+                      Chunk Size (characters)
+                    </label>
+                    <input
+                      type="number"
+                      min="100"
+                      max="10000"
+                      className="w-full bg-zinc-950 border border-zinc-700/50 rounded-md px-3 py-2 text-white focus:outline-none focus:ring-2 focus:ring-purple-500/50"
+                      value={draftChunking?.chunk_size || 1000}
+                      onChange={(e) => {
+                        setDraftChunking({
+                          ...draftChunking,
+                          chunk_size: parseInt(e.target.value) || 1000,
+                        });
+                      }}
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-zinc-400 mb-2">
+                      Chunk Overlap (characters)
+                    </label>
+                    <input
+                      type="number"
+                      min="0"
+                      max="500"
+                      className="w-full bg-zinc-950 border border-zinc-700/50 rounded-md px-3 py-2 text-white focus:outline-none focus:ring-2 focus:ring-purple-500/50"
+                      value={draftChunking?.chunk_overlap || 100}
+                      onChange={(e) => {
+                        setDraftChunking({
+                          ...draftChunking,
+                          chunk_overlap: parseInt(e.target.value) || 100,
+                        });
+                      }}
+                    />
+                  </div>
+                </div>
+              </div>
+            </section>
+
+            <section className="space-y-4">
+              <h3 className="text-lg font-medium text-white flex items-center gap-2">
                 <Database className="w-5 h-5 text-green-500" />
                 Vector Database
               </h3>
-              <div className="bg-zinc-900/50 border border-border rounded-lg p-6 space-y-6">
+              <div
+                className={`bg-zinc-900/50 border rounded-lg p-6 space-y-6 transition-all ${
+                  JSON.stringify(draftVectorStore) !==
+                  JSON.stringify(project?.vector_store_config || {})
+                    ? "border-amber-500/50 shadow-[0_0_10px_rgba(245,158,11,0.1)]"
+                    : "border-border"
+                }`}
+              >
                 <div>
                   <label className="block text-sm font-medium text-zinc-400 mb-2">
                     Vector Store Provider
                   </label>
                   <select
                     className="w-full bg-zinc-950 border border-zinc-700/50 rounded-md px-3 py-2 text-white focus:outline-none focus:ring-2 focus:ring-green-500/50"
-                    value={project?.vector_store_config?.provider || "pgvector"}
+                    value={draftVectorStore?.provider || "pgvector"}
                     onChange={(e) => {
-                      const newConfig = {
-                        ...project?.vector_store_config,
+                      setDraftVectorStore({
+                        ...draftVectorStore,
                         provider: e.target.value,
-                      };
-
-                      window.ipcRenderer
-                        .updateProjectConfig(
-                          project.id,
-                          project.embedding_config,
-                          project.chunking_config,
-                          newConfig,
-                        )
-                        .then((updated) => setProject(updated));
+                      });
                     }}
                   >
                     <option value="pgvector">PostgreSQL (pgvector)</option>
@@ -500,7 +811,7 @@ export function ProjectDetails() {
                   </select>
                 </div>
 
-                {project?.vector_store_config?.provider === "pgvector" && (
+                {draftVectorStore?.provider === "pgvector" && (
                   <div className="space-y-4">
                     <div>
                       <label className="block text-sm font-medium text-zinc-400 mb-2">
@@ -511,21 +822,12 @@ export function ProjectDetails() {
                           type="text"
                           className="flex-1 bg-zinc-950 border border-zinc-700/50 rounded-md px-3 py-2 text-white focus:outline-none focus:ring-2 focus:ring-green-500/50"
                           placeholder="postgresql://user:password@localhost:5432/dbname"
-                          value={project?.vector_store_config?.url || ""}
+                          value={draftVectorStore?.url || ""}
                           onChange={(e) => {
-                            const newConfig = {
-                              ...project?.vector_store_config,
+                            setDraftVectorStore({
+                              ...draftVectorStore,
                               url: e.target.value,
-                            };
-
-                            window.ipcRenderer
-                              .updateProjectConfig(
-                                project.id,
-                                project.embedding_config,
-                                project.chunking_config,
-                                newConfig,
-                              )
-                              .then((updated) => setProject(updated));
+                            });
                           }}
                         />
                         <Button
@@ -534,7 +836,7 @@ export function ProjectDetails() {
                           onClick={async () => {
                             const res =
                               await window.ipcRenderer.testPostgresConnection(
-                                project.vector_store_config?.url || "",
+                                draftVectorStore?.url || "",
                               );
                             if (res.success) {
                               alert(

@@ -107,6 +107,11 @@ export class DatabaseManager {
         .prepare("ALTER TABLE projects ADD COLUMN vector_store_config TEXT")
         .run();
     }
+    // Migration: Add color if missing
+    const hasColor = columns.some((c) => c.name === "color");
+    if (!hasColor) {
+      this.db.prepare("ALTER TABLE projects ADD COLUMN color TEXT").run();
+    }
   }
 
   // --- Settings ---
@@ -139,13 +144,62 @@ export class DatabaseManager {
     return stmt.all().map(this._parseProject);
   }
 
-  createProject(name: string, description: string = "") {
+  createProject(
+    name: string,
+    description: string = "",
+    color: string = "blue",
+  ) {
     const id = uuidv4();
     const stmt = this.db.prepare(`
-      INSERT INTO projects (id, name, description) VALUES (?, ?, ?)
+      INSERT INTO projects (id, name, description, color) VALUES (?, ?, ?, ?)
     `);
-    stmt.run(id, name, description);
+    stmt.run(id, name, description, color);
     return this.getProject(id);
+  }
+
+  updateProject(
+    id: string,
+    updates: { name?: string; description?: string; color?: string },
+  ) {
+    const fields = [];
+    const values = [];
+
+    if (updates.name !== undefined) {
+      fields.push("name = ?");
+      values.push(updates.name);
+    }
+    if (updates.description !== undefined) {
+      fields.push("description = ?");
+      values.push(updates.description);
+    }
+    if (updates.color !== undefined) {
+      fields.push("color = ?");
+      values.push(updates.color);
+    }
+
+    if (fields.length === 0) return this.getProject(id);
+
+    fields.push("updated_at = CURRENT_TIMESTAMP");
+    values.push(id); // for WHERE clause
+
+    const stmt = this.db.prepare(`
+      UPDATE projects SET ${fields.join(", ")} WHERE id = ?
+    `);
+
+    stmt.run(...values);
+    return this.getProject(id);
+  }
+
+  deleteProject(id: string) {
+    // Because of ON DELETE CASCADE on documents and chunks (if set), this helps,
+    // but we need to ensure we delete from vector store first in IPC handler or here if logic moved.
+    // Local constraints will handle local cascade if defined.
+    // Checking schema: FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE CASCADE is NOT on documents in schema string above?
+    // Wait, let me check schema string again.
+    // Line 53: FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE CASCADE
+    // Yes, it is there.
+    const stmt = this.db.prepare("DELETE FROM projects WHERE id = ?");
+    stmt.run(id);
   }
 
   getProject(id: string) {
@@ -219,11 +273,42 @@ export class DatabaseManager {
     stmt.run(status, id);
   }
 
+  deleteDocument(id: string) {
+    const stmt = this.db.prepare("DELETE FROM documents WHERE id = ?");
+    stmt.run(id);
+  }
+
   getProjectDocuments(projectId: string) {
     const stmt = this.db.prepare(
       "SELECT * FROM documents WHERE project_id = ? ORDER BY created_at DESC",
     );
     return stmt.all(projectId);
+  }
+
+  // --- Chunks (for local tracking/counting) ---
+
+  addChunk(
+    documentId: string,
+    chunkId: string,
+    content: string,
+    position: number = 0,
+  ) {
+    const stmt = this.db.prepare(`
+      INSERT INTO chunks (id, document_id, content, position) VALUES (?, ?, ?, ?)
+    `);
+    stmt.run(chunkId, documentId, content, position);
+  }
+
+  getDocumentChunks(documentId: string) {
+    const stmt = this.db.prepare(
+      "SELECT * FROM chunks WHERE document_id = ? ORDER BY position",
+    );
+    return stmt.all(documentId);
+  }
+
+  deleteDocumentChunks(documentId: string) {
+    const stmt = this.db.prepare("DELETE FROM chunks WHERE document_id = ?");
+    stmt.run(documentId);
   }
 
   updateProjectConfig(

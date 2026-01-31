@@ -63,3 +63,13 @@ body {
 ::-webkit-scrollbar-thumb {
   @apply bg-zinc-800 border-2 border-background rounded-full hover:bg-zinc-700 transition-colors;
 }
+
+/* Subtle placeholder styling */
+::placeholder {
+  @apply text-zinc-600 opacity-100;
+}
+
+input::placeholder,
+textarea::placeholder {
+  @apply text-zinc-600 opacity-100;
+}

@@ -34,10 +34,11 @@ export class OllamaManager {
     model: string,
     prompt: string,
   ): Promise<number[]> {
-    const response = await axios.post(`${baseUrl}/api/embeddings`, {
+    const response = await axios.post(`${baseUrl}/api/embed`, {
       model,
-      prompt,
+      input: prompt,
     });
-    return response.data.embedding;
+    // Handle both response formats: embeddings array (new) or embedding (old)
+    return response.data.embeddings?.[0] ?? response.data.embedding ?? [];
   }
 }

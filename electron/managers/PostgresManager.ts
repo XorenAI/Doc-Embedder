@@ -173,7 +173,6 @@ export class PostgresManager {
           c.content, 
           c.metadata, 
           d.name as document_name, 
-          d.source_path,
           (1 - (e.embedding <=> $1)) as similarity
         FROM ${config.embeddingTable} e
         JOIN ${config.chunkTable} c ON e.chunk_id = c.id
@@ -192,6 +191,54 @@ export class PostgresManager {
         /* ignore */
       }
       throw e;
+    }
+  }
+
+  async deleteDocumentVectors(
+    connectionString: string,
+    config: VectorStoreConfig,
+    documentId: string,
+  ) {
+    const client = new Client({ connectionString });
+    try {
+      await client.connect();
+      await client.query("BEGIN");
+
+      // 1. Delete Embeddings for chunks belonging to this document
+      // We need subquery to find chunks
+      await client.query(
+        `DELETE FROM ${config.embeddingTable} 
+         WHERE chunk_id IN (
+           SELECT id FROM ${config.chunkTable} WHERE document_id = $1
+         )`,
+        [documentId],
+      );
+
+      // 2. Delete Chunks
+      await client.query(
+        `DELETE FROM ${config.chunkTable} WHERE document_id = $1`,
+        [documentId],
+      );
+
+      // 3. Delete Document record in Postgres
+      await client.query(`DELETE FROM ${config.documentTable} WHERE id = $1`, [
+        documentId,
+      ]);
+
+      await client.query("COMMIT");
+      await client.end();
+      return { success: true };
+    } catch (e) {
+      await client.query("ROLLBACK");
+      try {
+        await client.end();
+      } catch {
+        /* ignore */
+      }
+      // We don't throw here to avoid blocking local deletion?
+      // Actually we should probably let the caller decide.
+      // But standard practice: return error object.
+      return { success: false, error: (e as Error).message };
     }
   }
 }

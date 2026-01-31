@@ -154,6 +154,10 @@ class DatabaseManager {
     if (!hasVectorConfig) {
       this.db.prepare("ALTER TABLE projects ADD COLUMN vector_store_config TEXT").run();
     }
+    const hasColor = columns.some((c) => c.name === "color");
+    if (!hasColor) {
+      this.db.prepare("ALTER TABLE projects ADD COLUMN color TEXT").run();
+    }
   }
   // --- Settings ---
   getSetting(key) {
@@ -180,13 +184,41 @@ class DatabaseManager {
     `);
     return stmt.all().map(this._parseProject);
   }
-  createProject(name, description = "") {
+  createProject(name, description = "", color = "blue") {
     const id = v4();
     const stmt = this.db.prepare(`
-      INSERT INTO projects (id, name, description) VALUES (?, ?, ?)
+      INSERT INTO projects (id, name, description, color) VALUES (?, ?, ?, ?)
     `);
-    stmt.run(id, name, description);
+    stmt.run(id, name, description, color);
     return this.getProject(id);
+  }
+  updateProject(id, updates) {
+    const fields = [];
+    const values = [];
+    if (updates.name !== void 0) {
+      fields.push("name = ?");
+      values.push(updates.name);
+    }
+    if (updates.description !== void 0) {
+      fields.push("description = ?");
+      values.push(updates.description);
+    }
+    if (updates.color !== void 0) {
+      fields.push("color = ?");
+      values.push(updates.color);
+    }
+    if (fields.length === 0) return this.getProject(id);
+    fields.push("updated_at = CURRENT_TIMESTAMP");
+    values.push(id);
+    const stmt = this.db.prepare(`
+      UPDATE projects SET ${fields.join(", ")} WHERE id = ?
+    `);
+    stmt.run(...values);
+    return this.getProject(id);
+  }
+  deleteProject(id) {
+    const stmt = this.db.prepare("DELETE FROM projects WHERE id = ?");
+    stmt.run(id);
   }
   getProject(id) {
     const stmt = this.db.prepare("SELECT * FROM projects WHERE id = ?");
@@ -235,11 +267,32 @@ class DatabaseManager {
     );
     stmt.run(status, id);
   }
+  deleteDocument(id) {
+    const stmt = this.db.prepare("DELETE FROM documents WHERE id = ?");
+    stmt.run(id);
+  }
   getProjectDocuments(projectId) {
     const stmt = this.db.prepare(
       "SELECT * FROM documents WHERE project_id = ? ORDER BY created_at DESC"
     );
     return stmt.all(projectId);
+  }
+  // --- Chunks (for local tracking/counting) ---
+  addChunk(documentId, chunkId, content, position = 0) {
+    const stmt = this.db.prepare(`
+      INSERT INTO chunks (id, document_id, content, position) VALUES (?, ?, ?, ?)
+    `);
+    stmt.run(chunkId, documentId, content, position);
+  }
+  getDocumentChunks(documentId) {
+    const stmt = this.db.prepare(
+      "SELECT * FROM chunks WHERE document_id = ? ORDER BY position"
+    );
+    return stmt.all(documentId);
+  }
+  deleteDocumentChunks(documentId) {
+    const stmt = this.db.prepare("DELETE FROM chunks WHERE document_id = ?");
+    stmt.run(documentId);
   }
   updateProjectConfig(projectId, embeddingConfig, chunkingConfig = null, vectorStoreConfig = null) {
     const stmt = this.db.prepare(`
@@ -380,7 +433,6 @@ class PostgresManager {
           c.content, 
           c.metadata, 
           d.name as document_name, 
-          d.source_path,
           (1 - (e.embedding <=> $1)) as similarity
         FROM ${config.embeddingTable} e
         JOIN ${config.chunkTable} c ON e.chunk_id = c.id
@@ -397,6 +449,37 @@ class PostgresManager {
       } catch {
       }
       throw e;
+    }
+  }
+  async deleteDocumentVectors(connectionString, config, documentId) {
+    const client = new Client({ connectionString });
+    try {
+      await client.connect();
+      await client.query("BEGIN");
+      await client.query(
+        `DELETE FROM ${config.embeddingTable} 
+         WHERE chunk_id IN (
+           SELECT id FROM ${config.chunkTable} WHERE document_id = $1
+         )`,
+        [documentId]
+      );
+      await client.query(
+        `DELETE FROM ${config.chunkTable} WHERE document_id = $1`,
+        [documentId]
+      );
+      await client.query(`DELETE FROM ${config.documentTable} WHERE id = $1`, [
+        documentId
+      ]);
+      await client.query("COMMIT");
+      await client.end();
+      return { success: true };
+    } catch (e) {
+      await client.query("ROLLBACK");
+      try {
+        await client.end();
+      } catch {
+      }
+      return { success: false, error: e.message };
     }
   }
 }
@@ -17424,11 +17507,12 @@ class OllamaManager {
     }
   }
   async getEmbedding(baseUrl, model, prompt) {
-    const response = await axios.post(`${baseUrl}/api/embeddings`, {
+    var _a;
+    const response = await axios.post(`${baseUrl}/api/embed`, {
       model,
-      prompt
+      input: prompt
     });
-    return response.data.embedding;
+    return ((_a = response.data.embeddings) == null ? void 0 : _a[0]) ?? response.data.embedding ?? [];
   }
 }
 class OpenAIManager {
@@ -17462,7 +17546,8 @@ class OpenAIManager {
   }
 }
 const require$1 = createRequire(import.meta.url);
-const pdf = require$1("pdf-parse");
+const mammoth = require$1("mammoth");
+const cheerio = require$1("cheerio");
 class ProcessingManager {
   constructor(db, pg, ollama, openai) {
     this.db = db;
@@ -17474,6 +17559,9 @@ class ProcessingManager {
     const project = this.db.getProject(projectId);
     if (!project) throw new Error("Project not found");
     const documents = this.db.getProjectDocuments(projectId).filter((d) => d.status === "pending" || d.status === "failed");
+    console.log(
+      `[ProcessingManager] Found ${documents.length} pending/failed documents for project ${projectId}. Total docs: ${this.db.getProjectDocuments(projectId).length}`
+    );
     if (documents.length === 0)
       return { processed: 0, message: "No pending documents" };
     const vectorConfig = project.vector_store_config;
@@ -17484,6 +17572,9 @@ class ProcessingManager {
     for (const d of documents) {
       const doc = d;
       try {
+        console.log(
+          `[ProcessingManager] Processing document: ${doc.name} (${doc.id})`
+        );
         this.db.updateDocumentStatus(doc.id, "processing");
         const content = await this.readDocument(doc);
         if (!content || !content.trim()) {
@@ -17495,15 +17586,36 @@ class ProcessingManager {
           chunk_overlap: 100
         };
         const chunks = this.chunkText(content, chunkConfig);
-        console.log(`Generated ${chunks.length} chunks for doc ${doc.name}`);
+        console.log(
+          `[ProcessingManager] Generated ${chunks.length} chunks for doc ${doc.name}`
+        );
+        if (chunks.length === 0) {
+          throw new Error("No chunks generated from document content");
+        }
         const chunksData = [];
         const embeddingsData = [];
+        if (!project.embedding_config || !project.embedding_config.provider) {
+          throw new Error(
+            "Embedding configuration not set. Please configure embedding provider in Settings."
+          );
+        }
+        if (!project.embedding_config.model) {
+          throw new Error(
+            "Embedding model not set. Please configure embedding model in Settings."
+          );
+        }
+        console.log(
+          `[ProcessingManager] Using embedding provider: ${project.embedding_config.provider}, model: ${project.embedding_config.model}`
+        );
         for (let i = 0; i < chunks.length; i++) {
           const chunkText = chunks[i];
           const chunkId = v4();
           let embedding = [];
           if (project.embedding_config.provider === "ollama") {
             const url2 = project.embedding_config.api_key_ref || "http://localhost:11434";
+            console.log(
+              `[ProcessingManager] Getting embedding from Ollama: ${url2}, chunk ${i + 1}/${chunks.length}`
+            );
             embedding = await this.ollama.getEmbedding(
               url2,
               project.embedding_config.model,
@@ -17516,7 +17628,7 @@ class ProcessingManager {
               chunkText
             );
           }
-          if (embedding.length > 0) {
+          if (embedding && embedding.length > 0) {
             chunksData.push({
               id: chunkId,
               documentId: doc.id,
@@ -17524,9 +17636,19 @@ class ProcessingManager {
               embeddingId: v4()
             });
             embeddingsData.push(embedding);
+          } else {
+            console.warn(
+              `[ProcessingManager] Empty embedding for chunk ${i + 1}`
+            );
           }
         }
+        console.log(
+          `[ProcessingManager] Successfully embedded ${chunksData.length}/${chunks.length} chunks`
+        );
         if (chunksData.length > 0) {
+          console.log(
+            `[ProcessingManager] Storing ${chunksData.length} chunks to PostgreSQL...`
+          );
           await this.pg.insertVectorData(
             vectorConfig.url,
             vectorConfig,
@@ -17534,11 +17656,23 @@ class ProcessingManager {
             chunksData,
             embeddingsData
           );
+          console.log(`[ProcessingManager] Stored successfully!`);
+          this.db.deleteDocumentChunks(doc.id);
+          for (let i = 0; i < chunksData.length; i++) {
+            const chunk = chunksData[i];
+            this.db.addChunk(doc.id, chunk.id, chunk.content, i);
+          }
+        } else {
+          throw new Error("No chunks with embeddings were generated");
         }
-        this.db.updateDocumentStatus(doc.id, "processed");
+        this.db.updateDocumentStatus(doc.id, "completed");
         processedCount++;
+        console.log(`[ProcessingManager] Document ${doc.name} completed.`);
       } catch (error) {
-        console.error(`Failed to process document ${doc.id}:`, error);
+        console.error(
+          `[ProcessingManager] Failed to process document ${doc.id}:`,
+          error
+        );
         this.db.updateDocumentStatus(doc.id, "failed");
       }
     }
@@ -17546,14 +17680,66 @@ class ProcessingManager {
   }
   async readDocument(doc) {
     if (doc.source_type === "url") {
-      throw new Error("URL processing not yet implemented");
+      try {
+        console.log(`[ProcessingManager] Fetching URL: ${doc.source_path}`);
+        const response = await fetch(doc.source_path, {
+          headers: {
+            "User-Agent": "Mozilla/5.0 (compatible; DocEmbedder/1.0)"
+          }
+        });
+        if (!response.ok) {
+          throw new Error(
+            `HTTP error: ${response.status} ${response.statusText}`
+          );
+        }
+        const html = await response.text();
+        const $ = cheerio.load(html);
+        $(
+          "script, style, nav, footer, header, aside, iframe, noscript"
+        ).remove();
+        const mainContent = $("main, article, .content, #content, .post").text() || $("body").text();
+        return mainContent.replace(/\s+/g, " ").trim();
+      } catch (e) {
+        throw new Error(`Error fetching URL: ${e.message}`);
+      }
     }
     const ext = path$1.extname(doc.source_path).toLowerCase();
     try {
       if (ext === ".pdf") {
         const dataBuffer = await fs$1.readFile(doc.source_path);
-        const data = await pdf(dataBuffer);
-        return data.text;
+        try {
+          const { PDFParse } = await import("./index-68THowHK.js");
+          const parser = new PDFParse({ data: dataBuffer });
+          const textResult = await parser.getText();
+          await parser.destroy();
+          return textResult.text;
+        } catch (importErr) {
+          console.log(
+            "[ProcessingManager] Dynamic import failed, trying require:",
+            importErr
+          );
+          const pdfModule = require$1("pdf-parse");
+          if (pdfModule.PDFParse) {
+            const parser = new pdfModule.PDFParse({ data: dataBuffer });
+            const textResult = await parser.getText();
+            await parser.destroy();
+            return textResult.text;
+          } else if (typeof pdfModule === "function") {
+            const data = await pdfModule(dataBuffer);
+            return data.text;
+          } else if (typeof pdfModule.default === "function") {
+            const data = await pdfModule.default(dataBuffer);
+            return data.text;
+          } else {
+            throw new Error(`Cannot parse PDF: unsupported pdf-parse version`);
+          }
+        }
+      } else if (ext === ".docx") {
+        console.log(
+          `[ProcessingManager] Extracting text from DOCX: ${doc.source_path}`
+        );
+        const result = await mammoth.extractRawText({ path: doc.source_path });
+        return result.value;
       } else if ([".txt", ".md", ".json", ".csv"].includes(ext)) {
         return await fs$1.readFile(doc.source_path, "utf-8");
       } else {
@@ -17711,8 +17897,31 @@ app.whenReady().then(() => {
   ipcMain.handle("get-projects", () => {
     return dbManager.getAllProjects();
   });
-  ipcMain.handle("create-project", (_, name, description) => {
-    return dbManager.createProject(name, description);
+  ipcMain.handle("create-project", (_, name, description, color) => {
+    return dbManager.createProject(name, description, color);
+  });
+  ipcMain.handle("update-project", (_, id, updates) => {
+    return dbManager.updateProject(id, updates);
+  });
+  ipcMain.handle("delete-project", async (_, id) => {
+    try {
+      const project = dbManager.getProject(id);
+      if (project && project.vector_store_config && project.vector_store_config.url) {
+        console.log(`Cleaning up vectors for project ${id}...`);
+        const docs = dbManager.getProjectDocuments(id);
+        for (const doc of docs) {
+          await pgManager.deleteDocumentVectors(
+            project.vector_store_config.url,
+            project.vector_store_config,
+            doc.id
+          );
+        }
+      }
+    } catch (e) {
+      console.error("Error cleaning up vectors during project deletion:", e);
+    }
+    dbManager.deleteProject(id);
+    return { success: true };
   });
   ipcMain.handle("get-project", (_, id) => {
     return dbManager.getProject(id);
@@ -17761,6 +17970,29 @@ app.whenReady().then(() => {
   });
   ipcMain.handle("get-project-documents", (_, projectId) => {
     return dbManager.getProjectDocuments(projectId);
+  });
+  ipcMain.handle("delete-document", async (_, projectId, documentId) => {
+    const project = dbManager.getProject(projectId);
+    if (!project) throw new Error("Project not found");
+    const doc = dbManager.getDocument(documentId);
+    if (!doc) throw new Error("Document not found");
+    if (project.vector_store_config && project.vector_store_config.url) {
+      console.log(
+        `Attempting to delete vectors for doc ${documentId} from ${project.vector_store_config.provider}`
+      );
+      if (project.vector_store_config.provider === "pgvector") {
+        const res = await pgManager.deleteDocumentVectors(
+          project.vector_store_config.url,
+          project.vector_store_config,
+          documentId
+        );
+        if (!res.success) {
+          console.warn("Failed to delete vectors from Postgres:", res.error);
+        }
+      }
+    }
+    dbManager.deleteDocument(documentId);
+    return { success: true };
   });
   ipcMain.handle(
     "update-project-config",

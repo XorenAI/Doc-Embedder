@@ -3,13 +3,15 @@ import { DatabaseManager } from "./DatabaseManager";
 import { PostgresManager } from "./PostgresManager";
 import { OllamaManager } from "./OllamaManager";
 import { OpenAIManager } from "./OpenAIManager";
+import { createRequire } from "module";
+import { v4 as uuidv4 } from "uuid";
 import fs from "fs/promises";
 import path from "path";
-import { v4 as uuidv4 } from "uuid";
-import { createRequire } from "module";
 
 const require = createRequire(import.meta.url);
-const pdf = require("pdf-parse");
+// Load these lazily at point of use to avoid bundler issues
+const mammoth = require("mammoth");
+const cheerio = require("cheerio");
 
 export class ProcessingManager {
   constructor(
@@ -24,8 +26,12 @@ export class ProcessingManager {
     if (!project) throw new Error("Project not found");
 
     const documents = (
-      this.db.getProjectDocuments(projectId) as Document[]
+      this.db.getProjectDocuments(projectId) as AppDocument[]
     ).filter((d) => d.status === "pending" || d.status === "failed");
+
+    console.log(
+      `[ProcessingManager] Found ${documents.length} pending/failed documents for project ${projectId}. Total docs: ${this.db.getProjectDocuments(projectId).length}`,
+    );
 
     if (documents.length === 0)
       return { processed: 0, message: "No pending documents" };
@@ -40,8 +46,11 @@ export class ProcessingManager {
     let processedCount = 0;
 
     for (const d of documents) {
-      const doc = d as unknown as AppDocument;
+      const doc = d; // Already cast above
       try {
+        console.log(
+          `[ProcessingManager] Processing document: ${doc.name} (${doc.id})`,
+        );
         this.db.updateDocumentStatus(doc.id, "processing");
 
         // 1. Read Content
@@ -57,10 +66,32 @@ export class ProcessingManager {
           chunk_overlap: 100,
         };
         const chunks = this.chunkText(content, chunkConfig);
-        console.log(`Generated ${chunks.length} chunks for doc ${doc.name}`);
+        console.log(
+          `[ProcessingManager] Generated ${chunks.length} chunks for doc ${doc.name}`,
+        );
+
+        if (chunks.length === 0) {
+          throw new Error("No chunks generated from document content");
+        }
 
         const chunksData = [];
         const embeddingsData = [];
+
+        // Validate embedding config
+        if (!project.embedding_config || !project.embedding_config.provider) {
+          throw new Error(
+            "Embedding configuration not set. Please configure embedding provider in Settings.",
+          );
+        }
+        if (!project.embedding_config.model) {
+          throw new Error(
+            "Embedding model not set. Please configure embedding model in Settings.",
+          );
+        }
+
+        console.log(
+          `[ProcessingManager] Using embedding provider: ${project.embedding_config.provider}, model: ${project.embedding_config.model}`,
+        );
 
         // 3. Generate Embeddings & Prepare Data
         for (let i = 0; i < chunks.length; i++) {
@@ -70,7 +101,10 @@ export class ProcessingManager {
 
           if (project.embedding_config.provider === "ollama") {
             const url =
-              project.embedding_config.api_key_ref || "http://localhost:11434"; // Temp usage of api_key_ref field for URL
+              project.embedding_config.api_key_ref || "http://localhost:11434";
+            console.log(
+              `[ProcessingManager] Getting embedding from Ollama: ${url}, chunk ${i + 1}/${chunks.length}`,
+            );
             embedding = await this.ollama.getEmbedding(
               url,
               project.embedding_config.model,
@@ -84,7 +118,7 @@ export class ProcessingManager {
             );
           }
 
-          if (embedding.length > 0) {
+          if (embedding && embedding.length > 0) {
             chunksData.push({
               id: chunkId,
               documentId: doc.id,
@@ -92,11 +126,22 @@ export class ProcessingManager {
               embeddingId: uuidv4(),
             });
             embeddingsData.push(embedding);
+          } else {
+            console.warn(
+              `[ProcessingManager] Empty embedding for chunk ${i + 1}`,
+            );
           }
         }
 
+        console.log(
+          `[ProcessingManager] Successfully embedded ${chunksData.length}/${chunks.length} chunks`,
+        );
+
         // 4. Store in Postgres
         if (chunksData.length > 0) {
+          console.log(
+            `[ProcessingManager] Storing ${chunksData.length} chunks to PostgreSQL...`,
+          );
           await this.pg.insertVectorData(
             vectorConfig.url,
             vectorConfig,
@@ -104,13 +149,28 @@ export class ProcessingManager {
             chunksData,
             embeddingsData,
           );
+          console.log(`[ProcessingManager] Stored successfully!`);
+
+          // Also store chunk records locally for counting
+          // First delete any existing chunks from previous processing attempts
+          this.db.deleteDocumentChunks(doc.id);
+          for (let i = 0; i < chunksData.length; i++) {
+            const chunk = chunksData[i];
+            this.db.addChunk(doc.id, chunk.id, chunk.content, i);
+          }
+        } else {
+          throw new Error("No chunks with embeddings were generated");
         }
 
         // 5. Update Status
-        this.db.updateDocumentStatus(doc.id, "processed");
+        this.db.updateDocumentStatus(doc.id, "completed");
         processedCount++;
+        console.log(`[ProcessingManager] Document ${doc.name} completed.`);
       } catch (error) {
-        console.error(`Failed to process document ${doc.id}:`, error);
+        console.error(
+          `[ProcessingManager] Failed to process document ${doc.id}:`,
+          error,
+        );
         // We'll update the status to failed but also log the error message if possible
         this.db.updateDocumentStatus(doc.id, "failed");
       }
@@ -120,9 +180,37 @@ export class ProcessingManager {
   }
 
   private async readDocument(doc: AppDocument): Promise<string> {
+    // Handle URL source type
     if (doc.source_type === "url") {
-      // TODO: Implement URL fetching with cheerio/puppeteer
-      throw new Error("URL processing not yet implemented");
+      try {
+        console.log(`[ProcessingManager] Fetching URL: ${doc.source_path}`);
+        const response = await fetch(doc.source_path, {
+          headers: {
+            "User-Agent": "Mozilla/5.0 (compatible; DocEmbedder/1.0)",
+          },
+        });
+        if (!response.ok) {
+          throw new Error(
+            `HTTP error: ${response.status} ${response.statusText}`,
+          );
+        }
+        const html = await response.text();
+        const $ = cheerio.load(html);
+
+        // Remove script, style, nav, footer, and other non-content elements
+        $(
+          "script, style, nav, footer, header, aside, iframe, noscript",
+        ).remove();
+
+        // Extract text from body or main content
+        const mainContent =
+          $("main, article, .content, #content, .post").text() ||
+          $("body").text();
+
+        return mainContent.replace(/\s+/g, " ").trim();
+      } catch (e) {
+        throw new Error(`Error fetching URL: ${(e as Error).message}`);
+      }
     }
 
     const ext = path.extname(doc.source_path).toLowerCase();
@@ -130,8 +218,46 @@ export class ProcessingManager {
     try {
       if (ext === ".pdf") {
         const dataBuffer = await fs.readFile(doc.source_path);
-        const data = await pdf(dataBuffer);
-        return data.text;
+
+        try {
+          // pdf-parse v2.x uses a class-based API
+          const { PDFParse } = await import("pdf-parse");
+          const parser = new PDFParse({ data: dataBuffer });
+          const textResult = await parser.getText();
+          await parser.destroy();
+          return textResult.text;
+        } catch (importErr) {
+          console.log(
+            "[ProcessingManager] Dynamic import failed, trying require:",
+            importErr,
+          );
+          // Fallback to require
+          const pdfModule = require("pdf-parse");
+
+          if (pdfModule.PDFParse) {
+            // v2.x class-based API
+            const parser = new pdfModule.PDFParse({ data: dataBuffer });
+            const textResult = await parser.getText();
+            await parser.destroy();
+            return textResult.text;
+          } else if (typeof pdfModule === "function") {
+            // v1.x function-based API
+            const data = await pdfModule(dataBuffer);
+            return data.text;
+          } else if (typeof pdfModule.default === "function") {
+            const data = await pdfModule.default(dataBuffer);
+            return data.text;
+          } else {
+            throw new Error(`Cannot parse PDF: unsupported pdf-parse version`);
+          }
+        }
+      } else if (ext === ".docx") {
+        // DOCX support using mammoth
+        console.log(
+          `[ProcessingManager] Extracting text from DOCX: ${doc.source_path}`,
+        );
+        const result = await mammoth.extractRawText({ path: doc.source_path });
+        return result.value;
       } else if ([".txt", ".md", ".json", ".csv"].includes(ext)) {
         return await fs.readFile(doc.source_path, "utf-8");
       } else {
