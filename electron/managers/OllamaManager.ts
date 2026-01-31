@@ -7,8 +7,8 @@ export class OllamaManager {
     try {
       const response = await axios.get(`${baseUrl}/api/version`); // Or just / to check if it's up
       return { success: true, version: response.data?.version || "Unknown" };
-    } catch (error: any) {
-      return { success: false, error: error.message };
+    } catch (error) {
+      return { success: false, error: (error as Error).message };
     }
   }
 
@@ -20,11 +20,12 @@ export class OllamaManager {
       const response = await axios.get(`${baseUrl}/api/tags`);
       const models = response.data?.models || [];
       const found = models.some(
-        (m: any) => m.name === modelName || m.name === `${modelName}:latest`,
+        (m: { name: string }) =>
+          m.name === modelName || m.name === `${modelName}:latest`,
       );
       return { success: true, found };
-    } catch (error: any) {
-      return { success: false, found: false, error: error.message };
+    } catch (error) {
+      return { success: false, found: false, error: (error as Error).message };
     }
   }
 

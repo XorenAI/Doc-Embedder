@@ -24,18 +24,14 @@ export function Dashboard() {
     activeVectorStores: 0,
     recentActivity: [],
   });
-  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     async function fetchStats() {
       try {
-        // @ts-ignore
         const data = await window.ipcRenderer.invoke("get-dashboard-stats");
         if (data) setStats(data);
       } catch (e) {
         console.error("Failed to fetch dashboard stats", e);
-      } finally {
-        setLoading(false);
       }
     }
     fetchStats();

@@ -268,8 +268,8 @@ class DatabaseManager {
     };
   }
 }
-const require$1 = createRequire(import.meta.url);
-const { Client } = require$1("pg");
+const require$2 = createRequire(import.meta.url);
+const { Client } = require$2("pg");
 class PostgresManager {
   async testConnection(connectionString) {
     const client = new Client({
@@ -283,13 +283,15 @@ class PostgresManager {
         WHERE table_schema = 'public' 
         AND table_type = 'BASE TABLE';
       `);
-      const tables = res.rows.map((row) => row.table_name);
+      const tables = res.rows.map(
+        (row) => row.table_name
+      );
       await client.end();
       return { success: true, tables };
     } catch (error) {
       try {
         await client.end();
-      } catch (e) {
+      } catch {
       }
       return { success: false, error: error.message };
     }
@@ -361,6 +363,35 @@ class PostgresManager {
       return true;
     } catch (e) {
       await client.query("ROLLBACK");
+      try {
+        await client.end();
+      } catch {
+      }
+      throw e;
+    }
+  }
+  async searchVectors(connectionString, config, queryVector, limit = 5) {
+    const client = new Client({ connectionString });
+    try {
+      await client.connect();
+      const vectorStr = `[${queryVector.join(",")}]`;
+      const query = `
+        SELECT 
+          c.content, 
+          c.metadata, 
+          d.name as document_name, 
+          d.source_path,
+          (1 - (e.embedding <=> $1)) as similarity
+        FROM ${config.embeddingTable} e
+        JOIN ${config.chunkTable} c ON e.chunk_id = c.id
+        JOIN ${config.documentTable} d ON c.document_id = d.id
+        ORDER BY e.embedding <=> $1
+        LIMIT $2;
+      `;
+      const res = await client.query(query, [vectorStr, limit]);
+      await client.end();
+      return res.rows;
+    } catch (e) {
       try {
         await client.end();
       } catch {
@@ -17404,14 +17435,15 @@ class OpenAIManager {
   async testConnection(apiKey) {
     var _a, _b, _c;
     try {
-      const response = await axios.get("https://api.openai.com/v1/models", {
+      await axios.get("https://api.openai.com/v1/models", {
         headers: {
           Authorization: `Bearer ${apiKey}`
         }
       });
       return { success: true };
     } catch (error) {
-      const msg = ((_c = (_b = (_a = error.response) == null ? void 0 : _a.data) == null ? void 0 : _b.error) == null ? void 0 : _c.message) || error.message;
+      const err = error;
+      const msg = ((_c = (_b = (_a = err.response) == null ? void 0 : _a.data) == null ? void 0 : _b.error) == null ? void 0 : _c.message) || err.message || "Unknown error";
       return { success: false, error: msg };
     }
   }
@@ -17429,6 +17461,8 @@ class OpenAIManager {
     return response.data.data[0].embedding;
   }
 }
+const require$1 = createRequire(import.meta.url);
+const pdf = require$1("pdf-parse");
 class ProcessingManager {
   constructor(db, pg, ollama, openai) {
     this.db = db;
@@ -17450,21 +17484,28 @@ class ProcessingManager {
     for (const d of documents) {
       const doc = d;
       try {
-        let content = "";
-        if (doc.source_type === "file") {
-          content = await fs$1.readFile(doc.source_path, "utf-8");
-        } else {
-          continue;
+        this.db.updateDocumentStatus(doc.id, "processing");
+        const content = await this.readDocument(doc);
+        if (!content || !content.trim()) {
+          throw new Error("Empty document content");
         }
-        const rawChunks = this.chunkText(content, 1e3);
+        const chunkConfig = project.chunking_config || {
+          strategy: "fixed",
+          chunk_size: 1e3,
+          chunk_overlap: 100
+        };
+        const chunks = this.chunkText(content, chunkConfig);
+        console.log(`Generated ${chunks.length} chunks for doc ${doc.name}`);
         const chunksData = [];
         const embeddingsData = [];
-        for (const chunkText of rawChunks) {
+        for (let i = 0; i < chunks.length; i++) {
+          const chunkText = chunks[i];
           const chunkId = v4();
           let embedding = [];
           if (project.embedding_config.provider === "ollama") {
+            const url2 = project.embedding_config.api_key_ref || "http://localhost:11434";
             embedding = await this.ollama.getEmbedding(
-              project.embedding_config.api_key_ref || "http://localhost:11434",
+              url2,
               project.embedding_config.model,
               chunkText
             );
@@ -17503,20 +17544,104 @@ class ProcessingManager {
     }
     return { processed: processedCount, total: documents.length };
   }
-  chunkText(text, maxLength) {
-    const chunks = [];
-    let currentChunk = "";
-    const sentences = text.split(/([.?!])\s+/);
-    for (const part of sentences) {
-      if (currentChunk.length + part.length > maxLength) {
-        if (currentChunk.trim()) chunks.push(currentChunk.trim());
-        currentChunk = "";
-      }
-      currentChunk += part;
+  async readDocument(doc) {
+    if (doc.source_type === "url") {
+      throw new Error("URL processing not yet implemented");
     }
-    if (currentChunk.trim()) chunks.push(currentChunk.trim());
-    if (chunks.length === 0 && text.trim()) return [text.trim()];
+    const ext = path$1.extname(doc.source_path).toLowerCase();
+    try {
+      if (ext === ".pdf") {
+        const dataBuffer = await fs$1.readFile(doc.source_path);
+        const data = await pdf(dataBuffer);
+        return data.text;
+      } else if ([".txt", ".md", ".json", ".csv"].includes(ext)) {
+        return await fs$1.readFile(doc.source_path, "utf-8");
+      } else {
+        throw new Error(`Unsupported file extension: ${ext}`);
+      }
+    } catch (e) {
+      throw new Error(`Error reading file: ${e.message}`);
+    }
+  }
+  chunkText(text, config) {
+    const strategy = config.strategy || "fixed";
+    const chunkSize = config.chunk_size || 1e3;
+    const chunkOverlap = config.chunk_overlap || 100;
+    if (strategy === "sentence") {
+      return this.chunkBySentence(text, chunkSize);
+    } else {
+      return this.chunkFixed(text, chunkSize, chunkOverlap);
+    }
+  }
+  chunkFixed(text, size, overlap) {
+    if (size <= 0) size = 1e3;
+    if (overlap >= size) overlap = size - 10;
+    if (overlap < 0) overlap = 0;
+    const chunks = [];
+    let start = 0;
+    while (start < text.length) {
+      const end = Math.min(start + size, text.length);
+      chunks.push(text.slice(start, end));
+      if (end === text.length) break;
+      start += size - overlap;
+    }
     return chunks;
+  }
+  chunkBySentence(text, size) {
+    const sentences = text.match(/[^.!?]+[.!?]+(\s+|$)/g) || [text];
+    const chunks = [];
+    let currentChunk = [];
+    let currentLength = 0;
+    for (let i = 0; i < sentences.length; i++) {
+      const sentence = sentences[i];
+      if (currentLength + sentence.length > size && currentChunk.length > 0) {
+        chunks.push(currentChunk.join("").trim());
+        const lastSentence = currentChunk[currentChunk.length - 1];
+        currentChunk = [];
+        currentLength = 0;
+        if (lastSentence && lastSentence.length < size) {
+          currentChunk.push(lastSentence);
+          currentLength += lastSentence.length;
+        }
+      }
+      currentChunk.push(sentence);
+      currentLength += sentence.length;
+    }
+    if (currentChunk.length > 0) {
+      chunks.push(currentChunk.join("").trim());
+    }
+    return chunks;
+  }
+  async searchProject(projectId, query, limit = 5) {
+    const project = this.db.getProject(projectId);
+    if (!project) throw new Error("Project not found");
+    const vectorConfig = project.vector_store_config;
+    if (!vectorConfig || !vectorConfig.url)
+      throw new Error("Vector Store not configured");
+    let queryVector = [];
+    if (project.embedding_config.provider === "ollama") {
+      const url2 = project.embedding_config.api_key_ref || "http://localhost:11434";
+      queryVector = await this.ollama.getEmbedding(
+        url2,
+        project.embedding_config.model,
+        query
+      );
+    } else if (project.embedding_config.provider === "openai") {
+      queryVector = await this.openai.getEmbedding(
+        project.embedding_config.api_key_ref,
+        project.embedding_config.model,
+        query
+      );
+    }
+    if (queryVector.length === 0) {
+      throw new Error("Failed to generate embedding for query");
+    }
+    return await this.pg.searchVectors(
+      vectorConfig.url,
+      vectorConfig,
+      queryVector,
+      limit
+    );
   }
 }
 const __filename$1 = fileURLToPath(import.meta.url);
@@ -17659,6 +17784,9 @@ app.whenReady().then(() => {
   });
   ipcMain.handle("process-project", async (_, projectId) => {
     return await processingManager.processProject(projectId);
+  });
+  ipcMain.handle("search-project", async (_, projectId, query, limit) => {
+    return await processingManager.searchProject(projectId, query, limit);
   });
   createWindow();
 });

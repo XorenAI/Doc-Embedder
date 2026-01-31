@@ -199,5 +199,9 @@ app.whenReady().then(() => {
     return await processingManager.processProject(projectId);
   });
 
+  ipcMain.handle("search-project", async (_, projectId, query, limit) => {
+    return await processingManager.searchProject(projectId, query, limit);
+  });
+
   createWindow();
 });

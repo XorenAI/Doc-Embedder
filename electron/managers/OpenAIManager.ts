@@ -6,14 +6,20 @@ export class OpenAIManager {
   ): Promise<{ success: boolean; error?: string }> {
     try {
       // Simple call to list models to verify API key
-      const response = await axios.get("https://api.openai.com/v1/models", {
+      await axios.get("https://api.openai.com/v1/models", {
         headers: {
           Authorization: `Bearer ${apiKey}`,
         },
       });
       return { success: true };
-    } catch (error: any) {
-      const msg = error.response?.data?.error?.message || error.message;
+    } catch (error) {
+      // Axios error structure
+      const err = error as {
+        response?: { data?: { error?: { message?: string } } };
+        message?: string;
+      };
+      const msg =
+        err.response?.data?.error?.message || err.message || "Unknown error";
       return { success: false, error: msg };
     }
   }

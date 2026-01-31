@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
-import { Plus, Search, FileText, Boxes, ArrowRight } from "lucide-react";
+import { Plus, FileText, Boxes, ArrowRight, FolderOpen } from "lucide-react";
 import { Button } from "../components/ui/button";
 import { CreateProjectDialog } from "../components/features/CreateProjectDialog";
 import { Project } from "../types";
@@ -13,7 +13,6 @@ const useProjects = () => {
 
   const fetchProjects = async () => {
     try {
-      // @ts-ignore - configured in preload
       const data = await window.ipcRenderer.invoke("get-projects");
       setProjects(data);
     } catch (err) {
@@ -28,7 +27,6 @@ const useProjects = () => {
   }, []);
 
   const createProject = async (name: string, description: string) => {
-    // @ts-ignore
     await window.ipcRenderer.invoke("create-project", name, description);
     await fetchProjects();
   };

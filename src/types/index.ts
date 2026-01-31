@@ -34,19 +34,27 @@ export interface ChunkingConfig {
   strategy: "fixed" | "sentence" | "paragraph" | "semantic" | "recursive";
   chunk_size: number;
   chunk_overlap: number;
-  preprocessing_rules?: Record<string, any>;
+  preprocessing_rules?: Record<string, unknown>;
 }
 
-export interface Document {
+export interface AppDocument {
   id: string;
   project_id: string;
   name: string;
   source_type: "file" | "url";
   source_path: string;
   content_hash?: string;
-  metadata?: Record<string, any>;
-  status: "pending" | "processing" | "completed" | "failed";
+  metadata?: Record<string, unknown>;
+  status: "pending" | "processing" | "processed" | "failed";
   version: number;
   created_at: string;
   processed_at?: string;
+}
+
+export interface SearchResult {
+  content: string;
+  metadata?: Record<string, unknown>;
+  document_name: string;
+  source_path: string;
+  similarity: number;
 }

@@ -1,3 +1,4 @@
+import { VectorStoreConfig, AppDocument } from "../../src/types";
 import { createRequire } from "module";
 const require = createRequire(import.meta.url);
 const { Client } = require("pg");
@@ -20,20 +21,24 @@ export class PostgresManager {
         AND table_type = 'BASE TABLE';
       `);
 
-      const tables = res.rows.map((row) => row.table_name);
+      const tables = res.rows.map(
+        (row: { table_name: string }) => row.table_name,
+      );
       await client.end();
 
       return { success: true, tables };
-    } catch (error: any) {
+    } catch (error) {
       try {
         await client.end();
-      } catch (e) {} // Ensure cleanup
-      return { success: false, error: error.message };
+      } catch {
+        /* ignore */
+      }
+      return { success: false, error: (error as Error).message };
     }
   }
   async ensureTables(
     connectionString: string,
-    config: any,
+    config: VectorStoreConfig,
   ): Promise<{ success: boolean; error?: string }> {
     const client = new Client({ connectionString });
     try {
@@ -85,19 +90,26 @@ export class PostgresManager {
 
       await client.end();
       return { success: true };
-    } catch (e: any) {
+    } catch (e) {
       try {
         await client.end();
-      } catch {}
-      return { success: false, error: e.message };
+      } catch {
+        /* ignore */
+      }
+      return { success: false, error: (e as Error).message };
     }
   }
 
   async insertVectorData(
     connectionString: string,
-    config: any,
-    doc: any,
-    chunks: any[],
+    config: VectorStoreConfig,
+    doc: AppDocument,
+    chunks: {
+      id: string;
+      documentId: string;
+      content: string;
+      embeddingId: string;
+    }[],
     embeddings: number[][],
   ) {
     const client = new Client({ connectionString });
@@ -138,7 +150,47 @@ export class PostgresManager {
       await client.query("ROLLBACK");
       try {
         await client.end();
-      } catch {}
+      } catch {
+        /* ignore */
+      }
+      throw e;
+    }
+  }
+  async searchVectors(
+    connectionString: string,
+    config: VectorStoreConfig,
+    queryVector: number[],
+    limit: number = 5,
+  ) {
+    const client = new Client({ connectionString });
+    try {
+      await client.connect();
+
+      const vectorStr = `[${queryVector.join(",")}]`;
+
+      const query = `
+        SELECT 
+          c.content, 
+          c.metadata, 
+          d.name as document_name, 
+          d.source_path,
+          (1 - (e.embedding <=> $1)) as similarity
+        FROM ${config.embeddingTable} e
+        JOIN ${config.chunkTable} c ON e.chunk_id = c.id
+        JOIN ${config.documentTable} d ON c.document_id = d.id
+        ORDER BY e.embedding <=> $1
+        LIMIT $2;
+      `;
+
+      const res = await client.query(query, [vectorStr, limit]);
+      await client.end();
+      return res.rows;
+    } catch (e) {
+      try {
+        await client.end();
+      } catch {
+        /* ignore */
+      }
       throw e;
     }
   }

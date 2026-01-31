@@ -8,38 +8,41 @@ import {
   FileText,
   Boxes,
   Play,
+  Search as SearchIcon,
 } from "lucide-react";
 import { Button } from "../components/ui/button";
-import { Project } from "../types";
+import { Project, AppDocument } from "../types";
+import { Search as SearchComponent } from "./Search";
 
 export function ProjectDetails() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
+
+  useEffect(() => {
+    if (!id) {
+      navigate("/projects");
+      return;
+    }
+  }, [id, navigate]);
   const [project, setProject] = useState<Project | null>(null);
   const [loading, setLoading] = useState(true);
   const [availableTables, setAvailableTables] = useState<string[]>([]); // For PG tables
   const [activeTab, setActiveTab] = useState<
-    "documents" | "chunks" | "settings"
+    "documents" | "chunks" | "search" | "settings"
   >("documents");
 
-  const [documents, setDocuments] = useState<any[]>([]);
+  const [documents, setDocuments] = useState<AppDocument[]>([]);
 
   useEffect(() => {
     async function fetchData() {
       try {
-        // @ts-ignore
-        const [projectData, documentsData] = await Promise.all([
-          // @ts-ignore
+        if (!id) return;
+        const [projectData] = await Promise.all([
           window.ipcRenderer.invoke("get-project", id),
-          // @ts-ignore
-          window.ipcRenderer.importDocuments
-            ? Promise.resolve([])
-            : Promise.resolve([]), // Initial load doesn't import, just gets
         ]);
 
         if (projectData) {
           setProject(projectData);
-          // @ts-ignore
           const docs = await window.ipcRenderer.getProjectDocuments(id);
           setDocuments(docs);
         } else {
@@ -55,17 +58,17 @@ export function ProjectDetails() {
   }, [id, navigate]);
 
   async function handleImport() {
+    if (!id) return;
     try {
-      // @ts-ignore
       const newDocs = await window.ipcRenderer.importDocuments(id);
       if (newDocs && newDocs.length > 0) {
         // Refresh documents list
-        // @ts-ignore
+
         const updatedDocs = await window.ipcRenderer.getProjectDocuments(id);
         setDocuments(updatedDocs);
 
         // Refresh project stats (doc count)
-        // @ts-ignore
+
         const updatedProject = await window.ipcRenderer.invoke(
           "get-project",
           id,
@@ -129,8 +132,8 @@ export function ProjectDetails() {
 
                 try {
                   console.log("Starting processing for project:", id);
-                  // @ts-ignore
-                  const res = await window.ipcRenderer.processProject(id);
+
+                  const res = await window.ipcRenderer.processProject(id!);
                   console.log("Processing result:", res);
 
                   if (res.processed === 0 && res.message) {
@@ -141,13 +144,13 @@ export function ProjectDetails() {
                     );
                   }
 
-                  // @ts-ignore
                   const updatedDocs =
-                    await window.ipcRenderer.getProjectDocuments(id);
+                    await window.ipcRenderer.getProjectDocuments(id || "");
                   setDocuments(updatedDocs);
-                } catch (e: any) {
+                } catch (e) {
                   console.error("Processing error:", e);
-                  alert(`Error during processing: ${e.message || e}`);
+                  const msg = e instanceof Error ? e.message : String(e);
+                  alert(`Error during processing: ${msg}`);
                 }
               }}
               className="gap-2 bg-emerald-600 hover:bg-emerald-500 text-white shadow-lg shadow-emerald-500/20 rounded-md px-4 py-2 h-10"
@@ -179,6 +182,13 @@ export function ProjectDetails() {
             <span className="bg-zinc-800 text-zinc-300 text-xs px-2 py-0.5 rounded-full ml-1">
               {project.chunk_count || 0}
             </span>
+          </button>
+          <button
+            onClick={() => setActiveTab("search")}
+            className={`pb-3 text-sm font-medium border-b-2 transition-colors flex items-center gap-2 ${activeTab === "search" ? "border-blue-500 text-blue-400" : "border-transparent text-zinc-400 hover:text-zinc-200"}`}
+          >
+            <SearchIcon className="w-4 h-4" />
+            Search
           </button>
           <button
             onClick={() => setActiveTab("settings")}
@@ -243,6 +253,8 @@ export function ProjectDetails() {
             </div>
           ))}
 
+        {activeTab === "search" && <SearchComponent projectId={id!} />}
+
         {activeTab === "settings" && (
           <div className="max-w-2xl space-y-8">
             <section className="space-y-4">
@@ -263,7 +275,7 @@ export function ProjectDetails() {
                         ...project?.embedding_config,
                         provider: e.target.value,
                       };
-                      // @ts-ignore
+
                       window.ipcRenderer
                         .updateProjectConfig(
                           project.id,
@@ -298,7 +310,7 @@ export function ProjectDetails() {
                             ...project?.embedding_config,
                             api_key_ref: e.target.value,
                           };
-                          // @ts-ignore
+
                           window.ipcRenderer
                             .updateProjectConfig(
                               project.id,
@@ -316,7 +328,7 @@ export function ProjectDetails() {
                           const url =
                             project?.embedding_config?.api_key_ref ||
                             "http://localhost:11434";
-                          // @ts-ignore
+
                           const res =
                             await window.ipcRenderer.testOllamaConnection(url);
                           if (res.success) {
@@ -353,7 +365,7 @@ export function ProjectDetails() {
                             ...project?.embedding_config,
                             api_key_ref: e.target.value,
                           };
-                          // @ts-ignore
+
                           window.ipcRenderer
                             .updateProjectConfig(
                               project.id,
@@ -371,7 +383,7 @@ export function ProjectDetails() {
                           const key = project?.embedding_config?.api_key_ref;
                           if (!key)
                             return alert("Please enter an API Key first");
-                          // @ts-ignore
+
                           const res =
                             await window.ipcRenderer.testOpenAIConnection(key);
                           if (res.success) {
@@ -402,7 +414,7 @@ export function ProjectDetails() {
                           ...project?.embedding_config,
                           model: e.target.value,
                         };
-                        // @ts-ignore
+
                         window.ipcRenderer
                           .updateProjectConfig(
                             project.id,
@@ -424,7 +436,7 @@ export function ProjectDetails() {
                           const model = project?.embedding_config?.model;
                           if (!model)
                             return alert("Please enter a model name first");
-                          // @ts-ignore
+
                           const res = await window.ipcRenderer.checkOllamaModel(
                             url,
                             model,
@@ -471,7 +483,7 @@ export function ProjectDetails() {
                         ...project?.vector_store_config,
                         provider: e.target.value,
                       };
-                      // @ts-ignore
+
                       window.ipcRenderer
                         .updateProjectConfig(
                           project.id,
@@ -505,7 +517,7 @@ export function ProjectDetails() {
                               ...project?.vector_store_config,
                               url: e.target.value,
                             };
-                            // @ts-ignore
+
                             window.ipcRenderer
                               .updateProjectConfig(
                                 project.id,
@@ -520,10 +532,9 @@ export function ProjectDetails() {
                           variant="outline"
                           className="shrink-0"
                           onClick={async () => {
-                            // @ts-ignore
                             const res =
                               await window.ipcRenderer.testPostgresConnection(
-                                project.vector_store_config.url,
+                                project.vector_store_config?.url || "",
                               );
                             if (res.success) {
                               alert(
@@ -566,7 +577,7 @@ export function ProjectDetails() {
                                   ...project?.vector_store_config,
                                   documentTable: e.target.value,
                                 };
-                                // @ts-ignore
+
                                 window.ipcRenderer
                                   .updateProjectConfig(
                                     project.id,
@@ -599,7 +610,7 @@ export function ProjectDetails() {
                                   ...project?.vector_store_config,
                                   chunkTable: e.target.value,
                                 };
-                                // @ts-ignore
+
                                 window.ipcRenderer
                                   .updateProjectConfig(
                                     project.id,
@@ -633,7 +644,7 @@ export function ProjectDetails() {
                                   ...project?.vector_store_config,
                                   embeddingTable: e.target.value,
                                 };
-                                // @ts-ignore
+
                                 window.ipcRenderer
                                   .updateProjectConfig(
                                     project.id,
@@ -678,7 +689,7 @@ export function ProjectDetails() {
                           ...project?.vector_store_config,
                           url: e.target.value,
                         };
-                        // @ts-ignore
+
                         window.ipcRenderer
                           .updateProjectConfig(
                             project.id,
