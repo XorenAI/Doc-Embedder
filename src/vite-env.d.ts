@@ -25,7 +25,19 @@ interface Window {
     ): Promise<any>;
     testPostgresConnection(url: string): Promise<any>;
     testOllamaConnection(url: string): Promise<any>;
+    getOllamaModels(url: string): Promise<{ success: boolean; models: { name: string; size: number; modified_at: string }[]; error?: string }>;
     checkOllamaModel(url: string, model: string): Promise<any>;
     testOpenAIConnection(key: string): Promise<any>;
+    archiveProject(id: string, archived: boolean): Promise<any>;
+    duplicateProject(id: string): Promise<any>;
+    exportProjectConfig(id: string): Promise<string | null>;
+    importProjectConfig(): Promise<any>;
+    chatSend(
+      ollamaUrl: string,
+      model: string,
+      messages: { role: string; content: string }[],
+      systemPrompt?: string,
+    ): Promise<void>;
+    chatAbort(): Promise<void>;
   };
 }

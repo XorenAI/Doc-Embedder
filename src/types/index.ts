@@ -59,3 +59,8 @@ export interface SearchResult {
   source_path: string;
   similarity: number;
 }
+
+export interface ChatMessage {
+  role: "user" | "assistant" | "system";
+  content: string;
+}

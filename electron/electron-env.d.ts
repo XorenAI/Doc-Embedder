@@ -40,11 +40,23 @@ interface Window {
     testPostgresConnection: (
       connectionString: string,
     ) => Promise<{ success: boolean; tables?: string[]; error?: string }>;
+    getOllamaModels: (url: string) => Promise<{ success: boolean; models: { name: string; size: number; modified_at: string }[]; error?: string }>;
     testOpenAIConnection: (
       apiKey: string,
     ) => Promise<{ success: boolean; error?: string }>;
     processProject: (
       projectId: string,
     ) => Promise<{ processed: number; total?: number; message?: string }>;
+    archiveProject: (id: string, archived: boolean) => Promise<any>;
+    duplicateProject: (id: string) => Promise<any>;
+    exportProjectConfig: (id: string) => Promise<string | null>;
+    importProjectConfig: () => Promise<any>;
+    chatSend: (
+      ollamaUrl: string,
+      model: string,
+      messages: { role: string; content: string }[],
+      systemPrompt?: string,
+    ) => Promise<void>;
+    chatAbort: () => Promise<void>;
   };
 }

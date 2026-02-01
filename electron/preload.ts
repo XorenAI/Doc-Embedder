@@ -50,12 +50,29 @@ contextBridge.exposeInMainWorld("ipcRenderer", {
     ipcRenderer.invoke("test-postgres-connection", connectionString),
   testOllamaConnection: (baseUrl: string) =>
     ipcRenderer.invoke("test-ollama-connection", baseUrl),
+  getOllamaModels: (baseUrl: string) =>
+    ipcRenderer.invoke("get-ollama-models", baseUrl),
   checkOllamaModel: (baseUrl: string, modelName: string) =>
     ipcRenderer.invoke("check-ollama-model", baseUrl, modelName),
   testOpenAIConnection: (apiKey: string) =>
     ipcRenderer.invoke("test-openai-connection", apiKey),
   processProject: (projectId: string) =>
     ipcRenderer.invoke("process-project", projectId),
+
+  // Project actions
+  archiveProject: (id: string, archived: boolean) =>
+    ipcRenderer.invoke("archive-project", id, archived),
+  duplicateProject: (id: string) =>
+    ipcRenderer.invoke("duplicate-project", id),
+  exportProjectConfig: (id: string) =>
+    ipcRenderer.invoke("export-project-config", id),
+  importProjectConfig: () =>
+    ipcRenderer.invoke("import-project-config"),
+
+  // Chat
+  chatSend: (ollamaUrl: string, model: string, messages: { role: string; content: string }[], systemPrompt?: string) =>
+    ipcRenderer.invoke("chat-send", ollamaUrl, model, messages, systemPrompt),
+  chatAbort: () => ipcRenderer.invoke("chat-abort"),
 
   // Window controls
   minimize: () => ipcRenderer.invoke("window-minimize"),

@@ -1,4 +1,5 @@
-import { app, BrowserWindow, ipcMain, dialog } from "electron";
+import { app, BrowserWindow, ipcMain, dialog, Notification } from "electron";
+import fs from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 import { DatabaseManager } from "./managers/DatabaseManager";
@@ -36,22 +37,29 @@ let pgManager: PostgresManager;
 let ollamaManager: OllamaManager;
 let openAIManager: OpenAIManager;
 let processingManager: ProcessingManager;
+let chatAbortController: AbortController | null = null;
 
 function createWindow() {
+  const savedBounds = dbManager.getSetting("window_bounds");
+
   win = new BrowserWindow({
     icon: path.join(process.env.VITE_PUBLIC, "logo.png"),
     webPreferences: {
       preload: path.join(__dirname, "preload.mjs"),
-      // Security warning: enabling nodeIntegration is not recommended, but for local tools sometimes useful.
-      // We stick to preload.
     },
-    width: 1200,
-    height: 800,
-    titleBarStyle: "hidden", // Premium look: frameless/hidden title bar if we implement custom one.
-    // Setting titleBarStyle 'hidden' effectively hides standard frame on Mac, on Windows it might need checks.
-    // For now keep standard or 'hidden' with traffic lights offset.
+    width: savedBounds?.width || 1200,
+    height: savedBounds?.height || 800,
+    x: savedBounds?.x,
+    y: savedBounds?.y,
+    titleBarStyle: "hidden",
     title: "Cartography",
-    backgroundColor: "#09090b", // match theme
+    backgroundColor: "#09090b",
+  });
+
+  win.on("close", () => {
+    if (win) {
+      dbManager.setSetting("window_bounds", win.getBounds());
+    }
   });
 
   // Test active push message to Renderer-process.
@@ -101,8 +109,8 @@ app.whenReady().then(() => {
   );
 
   // IPC Handlers
-  ipcMain.handle("get-projects", () => {
-    return dbManager.getAllProjects();
+  ipcMain.handle("get-projects", (_, includeArchived) => {
+    return dbManager.getAllProjects(includeArchived);
   });
 
   ipcMain.handle("create-project", (_, name, description, color) => {
@@ -155,6 +163,78 @@ app.whenReady().then(() => {
 
   ipcMain.handle("get-project", (_, id) => {
     return dbManager.getProject(id);
+  });
+
+  ipcMain.handle("archive-project", (_, id, archived) => {
+    return dbManager.archiveProject(id, archived);
+  });
+
+  ipcMain.handle("duplicate-project", (_, id) => {
+    const project = dbManager.getProject(id);
+    if (!project) throw new Error("Project not found");
+    const newProject = dbManager.createProject(
+      project.name + " (Copy)",
+      project.description,
+      project.color,
+    );
+    if (newProject && (project.embedding_config || project.chunking_config || project.vector_store_config)) {
+      dbManager.updateProjectConfig(
+        newProject.id,
+        project.embedding_config,
+        project.chunking_config,
+        project.vector_store_config,
+      );
+    }
+    return dbManager.getProject(newProject.id);
+  });
+
+  ipcMain.handle("export-project-config", async (_, id) => {
+    if (!win) return null;
+    const project = dbManager.getProject(id);
+    if (!project) throw new Error("Project not found");
+    const result = await dialog.showSaveDialog(win, {
+      title: "Export Project Configuration",
+      defaultPath: `${project.name.replace(/[^a-z0-9]/gi, "_")}_config.json`,
+      filters: [{ name: "JSON", extensions: ["json"] }],
+    });
+    if (result.canceled || !result.filePath) return null;
+    const config = {
+      name: project.name,
+      description: project.description,
+      tags: project.tags,
+      color: project.color,
+      embedding_config: project.embedding_config,
+      chunking_config: project.chunking_config,
+      vector_store_config: project.vector_store_config,
+    };
+    await fs.writeFile(result.filePath, JSON.stringify(config, null, 2));
+    return result.filePath;
+  });
+
+  ipcMain.handle("import-project-config", async () => {
+    if (!win) return null;
+    const result = await dialog.showOpenDialog(win, {
+      title: "Import Project Configuration",
+      filters: [{ name: "JSON", extensions: ["json"] }],
+      properties: ["openFile"],
+    });
+    if (result.canceled || result.filePaths.length === 0) return null;
+    const content = await fs.readFile(result.filePaths[0], "utf-8");
+    const config = JSON.parse(content);
+    const project = dbManager.createProject(
+      config.name || "Imported Project",
+      config.description || "",
+      config.color || "#2563eb",
+    );
+    if (project && (config.embedding_config || config.chunking_config || config.vector_store_config)) {
+      dbManager.updateProjectConfig(
+        project.id,
+        config.embedding_config,
+        config.chunking_config,
+        config.vector_store_config,
+      );
+    }
+    return dbManager.getProject(project!.id);
   });
 
   // Window Controls
@@ -268,16 +348,66 @@ app.whenReady().then(() => {
     return await ollamaManager.testConnection(baseUrl);
   });
 
+  ipcMain.handle("get-ollama-models", async (_, baseUrl) => {
+    return await ollamaManager.getModels(baseUrl);
+  });
+
   ipcMain.handle("check-ollama-model", async (_, baseUrl, modelName) => {
     return await ollamaManager.checkModel(baseUrl, modelName);
   });
 
   ipcMain.handle("process-project", async (_, projectId) => {
-    return await processingManager.processProject(projectId);
+    const result = await processingManager.processProject(projectId);
+    if (Notification.isSupported()) {
+      const project = dbManager.getProject(projectId);
+      new Notification({
+        title: "Processing Complete",
+        body: `${project?.name || "Project"}: ${result.processed} document${result.processed !== 1 ? "s" : ""} processed.`,
+      }).show();
+    }
+    return result;
   });
 
   ipcMain.handle("search-project", async (_, projectId, query, limit) => {
     return await processingManager.searchProject(projectId, query, limit);
+  });
+
+  // Chat streaming
+  ipcMain.handle("chat-send", async (event, ollamaUrl, model, messages, systemPrompt) => {
+    chatAbortController = new AbortController();
+
+    const chatMessages = systemPrompt
+      ? [{ role: "system" as const, content: systemPrompt }, ...messages]
+      : messages;
+
+    try {
+      await ollamaManager.chatStream(
+        ollamaUrl,
+        model,
+        chatMessages,
+        (token) => {
+          event.sender.send("chat-token", token);
+        },
+        chatAbortController.signal,
+      );
+      event.sender.send("chat-done");
+    } catch (err) {
+      const msg = (err as Error).message;
+      if (msg !== "Chat stream aborted") {
+        event.sender.send("chat-error", msg);
+      } else {
+        event.sender.send("chat-done");
+      }
+    } finally {
+      chatAbortController = null;
+    }
+  });
+
+  ipcMain.handle("chat-abort", () => {
+    if (chatAbortController) {
+      chatAbortController.abort();
+      chatAbortController = null;
+    }
   });
 
   createWindow();

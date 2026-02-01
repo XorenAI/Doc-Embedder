@@ -16,31 +16,31 @@ export function TitleBar() {
 
   return (
     <div
-      className="h-9 bg-zinc-950 flex items-center justify-between select-none"
+      className="h-8 bg-zinc-950 flex items-center justify-between select-none border-b border-border/40"
       style={{ WebkitAppRegion: "drag" } as React.CSSProperties}
     >
-      <div className="px-4 text-xs font-medium text-zinc-500">Cartography</div>
+      <div className="px-3 text-[11px] text-zinc-600">Cartography</div>
       <div
         className="flex h-full"
         style={{ WebkitAppRegion: "no-drag" } as React.CSSProperties}
       >
         <button
           onClick={handleMinimize}
-          className="h-full px-4 hover:bg-white/5 flex items-center justify-center transition-colors text-zinc-400 hover:text-white"
+          className="h-full px-3 hover:bg-white/5 flex items-center justify-center transition-colors text-zinc-500 hover:text-zinc-300"
         >
-          <Minus className="w-4 h-4" />
+          <Minus className="w-3.5 h-3.5" strokeWidth={1.5} />
         </button>
         <button
           onClick={handleMaximize}
-          className="h-full px-4 hover:bg-white/5 flex items-center justify-center transition-colors text-zinc-400 hover:text-white"
+          className="h-full px-3 hover:bg-white/5 flex items-center justify-center transition-colors text-zinc-500 hover:text-zinc-300"
         >
-          <Square className="w-3.5 h-3.5" />
+          <Square className="w-3 h-3" strokeWidth={1.5} />
         </button>
         <button
           onClick={handleClose}
-          className="h-full px-4 hover:bg-red-500/80 flex items-center justify-center transition-colors text-zinc-400 hover:text-white group"
+          className="h-full px-3 hover:bg-red-500/80 flex items-center justify-center transition-colors text-zinc-500 hover:text-white"
         >
-          <X className="w-4 h-4" />
+          <X className="w-3.5 h-3.5" strokeWidth={1.5} />
         </button>
       </div>
     </div>

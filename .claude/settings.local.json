@@ -1,0 +1,14 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm run build:*)",
+      "Bash(wmic datafile where \"name=''C:\\\\Users\\\\jitde\\\\OneDrive\\\\Desktop\\\\XorenAI\\\\ProjectFiles\\\\Doc-Embedder\\\\public\\\\logo.png''\" get FileSize)",
+      "Bash(git add:*)",
+      "Bash(git commit -m \"$\\(cat <<''EOF''\nfeat: Configure build for distribution with app icon, description, and TypeScript fixes\n\n- Set app name to Cartography and version to 1.0.0\n- Add app description to package.json\n- Configure electron-builder with logo.png as Windows icon\n- Fix TypeScript errors in vite-env.d.ts \\(add missing ipcRenderer methods\\)\n- Fix unknown type cast for docs in electron/main.ts\n\nCo-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>\nEOF\n\\)\")",
+      "Bash(git push:*)",
+      "Bash(npx tsc:*)",
+      "Bash(ls:*)",
+      "Bash(npx vite build:*)"
+    ]
+  }
+}

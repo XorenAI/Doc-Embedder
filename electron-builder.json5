@@ -1,44 +1,78 @@
 // @see - https://www.electron.build/configuration/configuration
 {
-  "$schema": "https://raw.githubusercontent.com/electron-userland/electron-builder/master/packages/app-builder-lib/scheme.json",
-  "appId": "com.cartography.app",
-  "asar": true,
-  "productName": "Cartography",
-  "directories": {
-    "output": "release/${version}"
+  $schema: "https://raw.githubusercontent.com/electron-userland/electron-builder/master/packages/app-builder-lib/scheme.json",
+
+  appId: "com.cartography.app",
+  productName: "Cartography",
+
+  // Quality / security baseline
+  asar: true,
+
+  // More professional output naming + consistent arch
+  artifactName: "${productName}-${os}-${version}-${arch}.${ext}",
+
+  directories: {
+    output: "release/${version}",
+    buildResources: "build",
   },
-  "files": [
-    "dist",
-    "dist-electron"
-  ],
-  "mac": {
-    "target": [
-      "dmg"
-    ],
-    "artifactName": "${productName}-Mac-${version}-Installer.${ext}"
+
+  // Only ship exactly what you need
+  files: ["dist/**", "dist-electron/**", "package.json"],
+
+  // IMPORTANT: prevents native module issues when packed into asar
+  asarUnpack: ["**/*.node", "**/node_modules/better-sqlite3/**"],
+
+  // Keep installers clean + reduce junk
+  removePackageScripts: true,
+
+  // Helps when native deps exist
+  npmRebuild: true,
+  nodeGypRebuild: false,
+
+  // Smaller build size
+  compression: "maximum",
+
+  // ---------- macOS ----------
+  mac: {
+    target: ["dmg"],
+    category: "public.app-category.productivity",
   },
-  "win": {
-    "icon": "public/logo.png",
-    "target": [
-      {
-        "target": "nsis",
-        "arch": [
-          "x64"
-        ]
-      }
-    ],
-    "artifactName": "${productName}-Windows-${version}-Setup.${ext}"
+
+  dmg: {
+    // feels premium
+    sign: false,
   },
-  "nsis": {
-    "oneClick": false,
-    "perMachine": false,
-    "allowToChangeInstallationDirectory": true,
-    "deleteAppDataOnUninstall": false
+
+  // ---------- Windows ----------
+  win: {
+    // For Windows installer best practice:
+    // Use .ico (NOT png). png works sometimes but it's not the right format.
+    icon: "public/logo.png",
+
+    target: [{ target: "nsis", arch: ["x64"] }],
   },
-  "linux": {
-    "target": [
-      "AppImage"
-    ],
-    "artifactName": "${productName}-Linux-${version}.${ext}"
-  }
+
+  nsis: {
+    oneClick: false,
+    perMachine: false,
+    allowElevation: true,
+    allowToChangeInstallationDirectory: true,
+
+    // UX polish
+    createDesktopShortcut: true,
+    createStartMenuShortcut: true,
+    shortcutName: "Cartography",
+
+    deleteAppDataOnUninstall: false,
+    runAfterFinish: true,
+  },
+
+  // ---------- Linux ----------
+  linux: {
+    target: ["AppImage"],
+    category: "Utility",
+  },
+
+  // Leave publishing explicit later (avoid accidental auto publish)
+  publish: null,
 }

@@ -132,16 +132,25 @@ export class DatabaseManager {
 
   // --- Projects ---
 
-  getAllProjects() {
+  getAllProjects(includeArchived = false) {
+    const whereClause = includeArchived ? "" : "WHERE archived = 0";
     const stmt = this.db.prepare(`
-      SELECT p.*, 
+      SELECT p.*,
         (SELECT COUNT(*) FROM documents d WHERE d.project_id = p.id) as document_count,
         (SELECT COUNT(*) FROM chunks c JOIN documents d ON c.document_id = d.id WHERE d.project_id = p.id) as chunk_count
       FROM projects p
-      WHERE archived = 0
+      ${whereClause}
       ORDER BY updated_at DESC
     `);
     return stmt.all().map(this._parseProject);
+  }
+
+  archiveProject(id: string, archived: boolean) {
+    const stmt = this.db.prepare(
+      "UPDATE projects SET archived = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+    );
+    stmt.run(archived ? 1 : 0, id);
+    return this.getProject(id);
   }
 
   createProject(

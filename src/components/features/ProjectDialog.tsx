@@ -11,7 +11,7 @@ interface ProjectDialogProps {
     description: string;
     color: string;
   }) => Promise<void>;
-  project?: Project; // If provided, we are in edit mode
+  project?: Project;
 }
 
 const COLORS = [
@@ -70,30 +70,28 @@ export function ProjectDialog({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-      {/* Backdrop */}
       <div
-        className="absolute inset-0 bg-black/60 backdrop-blur-sm transition-opacity"
+        className="absolute inset-0 bg-black/50"
         onClick={onClose}
       />
 
-      {/* Modal */}
-      <div className="relative w-full max-w-md bg-zinc-900 border border-white/10 rounded-xl shadow-2xl overflow-hidden glass-card animate-in fade-in zoom-in-95 duration-200">
-        <div className="flex items-center justify-between p-6 border-b border-white/5">
-          <h2 className="text-lg font-semibold text-white">
+      <div className="relative w-full max-w-sm bg-zinc-900 border border-border rounded-lg shadow-2xl overflow-hidden">
+        <div className="flex items-center justify-between px-4 py-3 border-b border-border">
+          <h2 className="text-[13px] font-medium text-white">
             {project ? "Edit Project" : "New Project"}
           </h2>
           <button
             onClick={onClose}
             className="text-zinc-500 hover:text-white transition-colors"
           >
-            <X className="w-5 h-5" />
+            <X className="w-4 h-4" />
           </button>
         </div>
 
-        <form onSubmit={handleSubmit} className="p-6 space-y-4">
-          <div className="space-y-2">
-            <label htmlFor="name" className="text-sm font-medium text-zinc-300">
-              Project Name
+        <form onSubmit={handleSubmit} className="p-4 space-y-3">
+          <div>
+            <label htmlFor="name" className="block text-[12px] font-medium text-zinc-500 mb-1.5">
+              Name
             </label>
             <input
               id="name"
@@ -101,55 +99,55 @@ export function ProjectDialog({
               value={name}
               onChange={(e) => setName(e.target.value)}
               placeholder="e.g. Finance Q1 Reports"
-              className="w-full px-3 py-2 bg-black/20 border border-white/10 rounded-md text-white placeholder:text-zinc-600 focus:outline-none focus:ring-2 focus:ring-blue-500/50"
+              className="w-full px-3 py-2 bg-zinc-950 border border-border rounded-md text-[13px] text-white placeholder:text-zinc-600 focus:outline-none focus:ring-1 focus:ring-ring"
               autoFocus
             />
           </div>
 
-          <div className="space-y-2">
+          <div>
             <label
               htmlFor="description"
-              className="text-sm font-medium text-zinc-300"
+              className="block text-[12px] font-medium text-zinc-500 mb-1.5"
             >
-              Description (Optional)
+              Description
             </label>
             <textarea
               id="description"
               value={description}
               onChange={(e) => setDescription(e.target.value)}
               placeholder="What is this project about?"
-              rows={3}
-              className="w-full px-3 py-2 bg-black/20 border border-white/10 rounded-md text-white placeholder:text-zinc-600 focus:outline-none focus:ring-2 focus:ring-blue-500/50 resize-none"
+              rows={2}
+              className="w-full px-3 py-2 bg-zinc-950 border border-border rounded-md text-[13px] text-white placeholder:text-zinc-600 focus:outline-none focus:ring-1 focus:ring-ring resize-none"
             />
           </div>
 
-          <div className="space-y-2">
-            <label className="text-sm font-medium text-zinc-300">
-              Color Tag
+          <div>
+            <label className="block text-[12px] font-medium text-zinc-500 mb-1.5">
+              Color
             </label>
-            <div className="flex flex-wrap gap-2">
+            <div className="flex flex-wrap gap-1.5">
               {COLORS.map((c) => (
                 <button
                   key={c.value}
                   type="button"
                   onClick={() => setColor(c.value)}
-                  className={`w-6 h-6 rounded-full transition-transform hover:scale-110 flex items-center justify-center ${
+                  className={`w-5 h-5 rounded-full transition-transform hover:scale-110 flex items-center justify-center ${
                     color === c.value
-                      ? "ring-2 ring-white ring-offset-2 ring-offset-zinc-900"
+                      ? "ring-2 ring-white ring-offset-1 ring-offset-zinc-900"
                       : ""
                   }`}
                   style={{ backgroundColor: c.value }}
                   title={c.name}
                 >
                   {color === c.value && (
-                    <Check className="w-3 h-3 text-white/90" />
+                    <Check className="w-2.5 h-2.5 text-white/90" />
                   )}
                 </button>
               ))}
             </div>
           </div>
 
-          <div className="flex justify-end gap-3 pt-2">
+          <div className="flex justify-end gap-2 pt-1">
             <Button
               type="button"
               variant="ghost"
@@ -162,8 +160,8 @@ export function ProjectDialog({
               {isLoading
                 ? "Saving..."
                 : project
-                  ? "Save Changes"
-                  : "Create Project"}
+                  ? "Save"
+                  : "Create"}
             </Button>
           </div>
         </form>
