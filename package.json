@@ -4,7 +4,7 @@
   "repository": "https://github.com/XorenAI/Doc-Embedder",
   "description": "This app creates embedding and save to your desired database with your desired model",
   "private": true,
-  "version": "1.1.0",
+  "version": "1.0.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
